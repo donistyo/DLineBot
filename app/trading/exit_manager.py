@@ -1,0 +1,70 @@
+from app.mt5.position_controller import PositionController
+
+
+class ExitManager:
+
+    def __init__(self):
+
+        self.controller = PositionController()
+
+        self.min_confidence = 0.75
+
+    def process(
+
+        self,
+
+        position,
+
+        prediction
+
+    ):
+
+        signal = prediction["signal"]
+
+        confidence = prediction["confidence"]
+
+        current_type = "BUY" if position.type == 0 else "SELL"
+
+        if signal == current_type:
+
+            return {
+
+                "status": "HOLD",
+
+                "action": "NONE",
+
+                "reason": "Posisi masih searah AI.",
+
+                "ticket": position.ticket
+
+            }
+
+        if confidence < self.min_confidence:
+
+            return {
+
+                "status": "HOLD",
+
+                "action": "NONE",
+
+                "reason": "Reverse signal belum cukup kuat.",
+
+                "ticket": position.ticket
+
+            }
+
+        result = self.controller.close(position)
+
+        return {
+
+            "status": "CLOSED",
+
+            "action": "CLOSE",
+
+            "reason": "AI memberikan sinyal berlawanan.",
+
+            "ticket": position.ticket,
+
+            "result": result
+
+        }

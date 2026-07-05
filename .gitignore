@@ -1,0 +1,30 @@
+# Virtual Environment
+venv/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment
+.env
+
+# Generated Files
+logs/
+datasets/
+models/
+history/
+reports/
+data/
+
+# IDE
+.vscode/
+.idea/
+
+# Database
+*.db
+*.sqlite
+
+# macOS
+.DS_Store

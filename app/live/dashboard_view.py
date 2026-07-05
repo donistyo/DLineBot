@@ -1,0 +1,31 @@
+class DashboardView:
+
+    @staticmethod
+    def show(data):
+
+        print()
+        print("=" * 60)
+        print("DLineBot")
+        print("=" * 60)
+        print()
+        print(f"AI          {data['signal']}")
+        print()
+        print(f"Confidence  {data['confidence']:.0%}")
+        print()
+        print(f"Trade       {data['trade']}")
+        print()
+        print(f"Spread      {data['spread']}")
+        print()
+        print(f"ATR         {data['atr']}")
+        print()
+        print(f"Risk        {data['risk']}")
+        print()
+        print(f"Position    {data['position']}")
+        print()
+        print(f"Daily Risk  {data['daily_risk']}")
+        print()
+        print(f"Drawdown    {data['drawdown']}")
+        print()
+        print(f"AutoTrader  {data['auto_trader']}")
+        print()
+        print("=" * 60)
