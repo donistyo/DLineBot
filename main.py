@@ -76,12 +76,12 @@ def main():
     # ==================================================
 
     df = collector.load(
-        symbol="XAUUSD",
+        symbol="XAUUSDc",
         timeframe="M1",
         bars=2000
     )
 
-    print("✓ Data berhasil diambil")
+    print("[OK] Data berhasil diambil")
 
     # ==================================================
     # 2. Hitung Indicator
@@ -89,7 +89,7 @@ def main():
 
     df = engine.calculate(df)
 
-    print("✓ Indicator berhasil dihitung")
+    print("[OK] Indicator berhasil dihitung")
 
     # ==================================================
     # 3. Cleaning Dataset
@@ -97,7 +97,7 @@ def main():
 
     df = cleaner.clean(df)
 
-    print("✓ Dataset berhasil dibersihkan")
+    print("[OK] Dataset berhasil dibersihkan")
 
     # ==================================================
     # 4. Generate Label
@@ -105,7 +105,7 @@ def main():
 
     df = labeler.generate(df)
 
-    print("✓ Label AI berhasil dibuat")
+    print("[OK] Label AI berhasil dibuat")
 
     print("\nPreview Label AI")
     print("-" * 60)
@@ -132,7 +132,7 @@ def main():
         "M1"
     )
 
-    print(f"\n✓ Dataset disimpan : {dataset_path}")
+    print(f"\n[OK] Dataset disimpan : {dataset_path}")
 
     # ==================================================
     # 6. Informasi Dataset
@@ -244,7 +244,7 @@ def main():
         y_train
     )
 
-    print("✓ Model berhasil dilatih")
+    print("[OK] Model berhasil dilatih")
 
     # ==================================================
     # 9. Evaluasi Model
@@ -364,7 +364,7 @@ def main():
 
     files = report_manager.export_all(
         report=report,
-        symbol="XAUUSD",
+        symbol="XAUUSDc",
         timeframe="M1"
     )
 
@@ -433,7 +433,7 @@ def main():
     dashboard_file = dashboard.export(
         report,
         performance,
-        symbol="XAUUSD",
+        symbol="XAUUSDc",
         timeframe="M1"
     )
 
@@ -473,7 +473,7 @@ def main():
         "xgboost_xauusd_m1.joblib"
     )
 
-    print(f"\n✓ Model disimpan : {model_path}")
+    print(f"\n[OK] Model disimpan : {model_path}")
 
     # ==================================================
     # Ringkasan
@@ -489,20 +489,20 @@ def main():
 
     print()
 
-    print("✓ MT5 Collector")
-    print("✓ Indicator Engine")
-    print("✓ Data Cleaner")
-    print("✓ Label Generator")
-    print("✓ Dataset Manager")
-    print("✓ Data Splitter")
-    print("✓ XGBoost Trainer")
-    print("✓ Model Evaluator")
-    print("✓ Predictor")
-    print("✓ Decision Engine")
-    print("✓ Risk Manager")
-    print("✓ Model Manager")
+    print("[OK] MT5 Collector")
+    print("[OK] Indicator Engine")
+    print("[OK] Data Cleaner")
+    print("[OK] Label Generator")
+    print("[OK] Dataset Manager")
+    print("[OK] Data Splitter")
+    print("[OK] XGBoost Trainer")
+    print("[OK] Model Evaluator")
+    print("[OK] Predictor")
+    print("[OK] Decision Engine")
+    print("[OK] Risk Manager")
+    print("[OK] Model Manager")
 
-    print("\n🚀 Siap memasuki Sprint 20 (Backtesting Engine)")
+    print("\nSiap memasuki Sprint 20 (Backtesting Engine)")
 
 
 if __name__ == "__main__":

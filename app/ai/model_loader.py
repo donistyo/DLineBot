@@ -18,6 +18,6 @@ class ModelLoader:
 
         model = joblib.load(path)
 
-        print(f"✓ Model berhasil dimuat : {path}")
+        print(f"[OK] Model berhasil dimuat : {path}")
 
         return model

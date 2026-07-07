@@ -76,11 +76,13 @@ from app.live.market_regime_view import MarketRegimeView
 from app.trading.confidence_manager import ConfidenceManager
 from app.live.confidence_view import ConfidenceView
 from app.live.dashboard_view import DashboardView
-from app.live.multi_tf_view import MultiTFView
-from app.live.score_view import ScoreView
 from app.notification.telegram_notifier import TelegramNotifier
 from app.database.db_logger import DatabaseLogger
 from app.database.session import init_db
+from app.strategy.daily_trend_engine import DailyTrendEngine
+from app.strategy.daily_trend_view import DailyTrendView
+from app.live.multi_tf_view import MultiTFView
+from app.live.score_view import ScoreView
 from app.trading.learning_manager import LearningManager
 
 
@@ -88,7 +90,7 @@ class LiveEngine:
 
     def __init__(
         self,
-        symbol="XAUUSD",
+        symbol="XAUUSDc",
         timeframe="M1",
         bars=2000,
         dry_run=True,
@@ -151,13 +153,14 @@ class LiveEngine:
             print("=" * 60)
             print("BROKER PROFILE : Exness")
             print("=" * 60)
-            print("Spread   : max_spread 40 -> 50")
+            print("Spread   : max_spread 40 -> 200")
             print("SL       : sl_points  4  -> 5")
             print("TimeExit : 120 menit  -> 60 menit")
             print("Risk     : 2%         -> 1.5%")
+            print("DailyMax : 15         -> 50")
 
             if mode == "scalp":
-                max_spread = 50
+                max_spread = 300
                 sl_points = 5
                 min_atr_val = 0.5
 
@@ -220,6 +223,10 @@ class LiveEngine:
             daily_max_trade = 5
             daily_max_loss = -150
             daily_max_profit = 300
+
+        if BROKER == "exness" and mode == "scalp":
+            daily_max_trade = 50
+            daily_max_loss = -300
 
         self.break_even = BreakEvenManager(
             trigger_profit=be_trigger
@@ -330,6 +337,19 @@ class LiveEngine:
         )
 
         self.last_candle_time = None
+        self.last_signal_time = None
+        self.daily_fundamental = DailyTrendEngine()
+        self.daily_fundamental.update(
+            bias="STRONG BULLISH",
+            confidence=100,
+            score=6,
+            reasons=[
+                "DXY melemah",
+                "US10Y Yield turun",
+                "CPI lebih rendah dari perkiraan",
+                "NFP lebih lemah dari perkiraan"
+            ]
+        )
 
         print()
         print("=" * 60)
@@ -531,6 +551,35 @@ class LiveEngine:
             MarketRegimeView.show(regime)
 
             # ===============================
+            # Fundamental Daily
+            # ===============================
+
+            fundamental = self.daily_fundamental.analyze()
+
+            DailyTrendView.show(fundamental)
+
+            # ===============================
+            # 15-Minute Signal
+            # ===============================
+
+            now = last["time"]
+            if (self.last_signal_time is None or
+                (now - self.last_signal_time).total_seconds() >= 900):
+
+                self.last_signal_time = now
+
+                signal_text = (
+                    f"[SIGNAL] {fundamental['bias']}\n"
+                    f"Confidence: {fundamental['confidence']}%\n"
+                    f"Score: {fundamental['score']}/10\n"
+                )
+                if fundamental["reasons"]:
+                    signal_text += "\nReasons:\n" + "\n".join(
+                        f"- {r}" for r in fundamental["reasons"]
+                    )
+                self.telegram.send(signal_text)
+
+            # ===============================
             # Prediction
             # ===============================
 
@@ -580,6 +629,29 @@ class LiveEngine:
             DecisionView.show(
                 decision
             )
+
+            # ===============================
+            # Proposed Trade
+            # ===============================
+
+            try:
+                proposed = self.calculate_risk(
+                    prediction, last["close"], last, regime
+                )
+            except Exception:
+                proposed = None
+
+            if proposed and proposed.get("lot_size", 0) > 0:
+                print()
+                print("=" * 60)
+                print("PROPOSED TRADE")
+                print("=" * 60)
+                print(f"Signal      : {prediction['signal']}")
+                print(f"Entry       : {proposed['entry_price']:.2f}")
+                print(f"Stop Loss   : {proposed['stop_loss']:.2f}")
+                print(f"Take Profit : {proposed['take_profit']:.2f}")
+                print(f"Lot Size    : {proposed['lot_size']}")
+                print(f"Risk Amount : ${proposed['risk_amount']:.2f}")
 
             # ===============================
             # Trade Filter

@@ -8,7 +8,7 @@ from app.config.settings import DASHBOARD_URL
 
 class LiveRunner:
 
-    def __init__(self, interval=10, symbol="XAUUSD", timeframe="M1", bars=2000, dry_run=True, mode="scalp"):
+    def __init__(self, interval=10, symbol="XAUUSDc", timeframe="M1", bars=2000, dry_run=True, mode="scalp"):
 
         self.interval = interval
         self.running = False

@@ -17,39 +17,39 @@ class SmartScalpingView:
         print(f"SCALP SCORE  {score:.0f}/100  {grade}  [{direction}]")
         print()
 
-        engines_emoji = {
-            "momentum": "⚡",
-            "speed": "�",
-            "liquidity": "💧",
-            "fake_breakout": "🎯",
-            "session": "🌍",
-            "impulse": "💥",
+        engines = {
+            "momentum": "MOM",
+            "speed": "SPD",
+            "liquidity": "LIQ",
+            "fake_breakout": "FBO",
+            "session": "SES",
+            "impulse": "IMP",
         }
 
-        for key, emoji in engines_emoji.items():
+        for key, label_prefix in engines.items():
             eng = data.get(key, {})
             if not eng:
                 continue
             score = eng.get("score", 0)
             label = key.replace("_", " ").title()
             if key == "momentum":
-                print(f"  {emoji} {label:20s} {score:3d}  [{eng.get('direction','-')}]  body:{eng.get('body_ratio',0):.1f}x  accel:{eng.get('acceleration',0):.2f}")
+                print(f"  [{label_prefix}] {label:20s} {score:3d}  [{eng.get('direction','-')}]  body:{eng.get('body_ratio',0):.1f}x  accel:{eng.get('acceleration',0):.2f}")
             elif key == "speed":
-                print(f"  {emoji} {label:20s} {score:3d}  [{eng.get('level','-')}]  {eng.get('speed',0):.2f}/candle")
+                print(f"  [{label_prefix}] {label:20s} {score:3d}  [{eng.get('level','-')}]  {eng.get('speed',0):.2f}/candle")
             elif key == "liquidity":
-                stop = "⚠️ STOP HUNT" if eng.get("stop_hunt") else ""
-                grab = "💰 LIQ GRAB" if eng.get("liquidity_grab") else ""
-                extra = f"  {stop} {grab}".strip()
-                print(f"  {emoji} {label:20s} {score:3d}  [{eng.get('signal','-')}]{extra}")
+                stop = " STOP HUNT" if eng.get("stop_hunt") else ""
+                grab = " LIQ GRAB" if eng.get("liquidity_grab") else ""
+                extra = f"{stop} {grab}".strip()
+                print(f"  [{label_prefix}] {label:20s} {score:3d}  [{eng.get('signal','-')}]  {extra}")
             elif key == "fake_breakout":
-                fake = "⚠️ FAKE" if eng.get("fake_breakout") else ""
-                print(f"  {emoji} {label:20s} {score:3d}  [{eng.get('signal','-')}]  {fake}")
+                fake = " FAKE" if eng.get("fake_breakout") else ""
+                print(f"  [{label_prefix}] {label:20s} {score:3d}  [{eng.get('signal','-')}] {fake}")
             elif key == "session":
-                overlap = "🔀 OVERLAP" if eng.get("is_overlap") else ""
-                print(f"  {emoji} {label:20s} {score:3d}  [{eng.get('session','-')}]  {overlap}")
+                overlap = " OVERLAP" if eng.get("is_overlap") else ""
+                print(f"  [{label_prefix}] {label:20s} {score:3d}  [{eng.get('session','-')}] {overlap}")
             elif key == "impulse":
-                imp = "💥 IMPULSE" if eng.get("impulse") else ""
-                print(f"  {emoji} {label:20s} {score:3d}  [{eng.get('signal','-')}]  {imp}")
+                imp = " IMPULSE" if eng.get("impulse") else ""
+                print(f"  [{label_prefix}] {label:20s} {score:3d}  [{eng.get('signal','-')}] {imp}")
 
         print()
         details = ss.get("details", {})

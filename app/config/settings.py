@@ -32,6 +32,6 @@ if not DASHBOARD_URL:
 
 BROKER = os.getenv("BROKER", "").lower()
 
-DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "XAUUSD")
+DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "XAUUSDc")
 DEFAULT_TIMEFRAME = os.getenv("DEFAULT_TIMEFRAME", "H1")
 DEFAULT_BARS = int(os.getenv("DEFAULT_BARS", 1000))
