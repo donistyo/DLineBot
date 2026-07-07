@@ -17,6 +17,7 @@ models/
 history/
 reports/
 data/
+runtime/
 
 # IDE
 .vscode/

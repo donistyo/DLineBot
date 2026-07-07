@@ -11,7 +11,7 @@ class LabelGenerator:
     def __init__(
         self,
         future_bars: int = 5,
-        threshold: float = 5.0
+        threshold: float = 0.5
     ):
         self.future_bars = future_bars
         self.threshold = threshold

@@ -1,10 +1,59 @@
+import subprocess
+import sys
+import atexit
+import signal
+import os
+from pathlib import Path
+
 from app.live.live_runner import LiveRunner
+
+_dashboard_proc = None
+
+
+def start_dashboard():
+    global _dashboard_proc
+    script = str(Path(__file__).parent / "dashboard.py")
+    _dashboard_proc = subprocess.Popen(
+        [sys.executable, script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    )
+    print(f"Dashboard started (PID: {_dashboard_proc.pid})")
+    return _dashboard_proc
+
+
+def stop_dashboard():
+    global _dashboard_proc
+    if _dashboard_proc and _dashboard_proc.poll() is None:
+        _dashboard_proc.terminate()
+        try:
+            _dashboard_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _dashboard_proc.kill()
+        print("Dashboard stopped.")
+        _dashboard_proc = None
 
 
 def main():
 
+    print("=" * 60)
+    print("DLineBot - Starting Bot + Dashboard")
+    print("=" * 60)
+
+    atexit.register(stop_dashboard)
+    signal.signal(signal.SIGINT, lambda s, f: (stop_dashboard(), sys.exit(0)))
+    signal.signal(signal.SIGTERM, lambda s, f: (stop_dashboard(), sys.exit(0)))
+
+    start_dashboard()
+
     runner = LiveRunner(
-        interval=10
+        interval=10,
+        symbol="XAUUSD",
+        timeframe="M1",
+        bars=2000,
+        dry_run=True,
+        mode="scalp"
     )
 
     runner.start()

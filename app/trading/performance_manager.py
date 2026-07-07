@@ -1,114 +1,36 @@
-import os
-import pandas as pd
+from app.mt5.history_manager import HistoryManager
 
 
 class PerformanceManager:
 
     def __init__(self):
-
-        self.log_file = "logs/live_trade_log.csv"
+        self.history = HistoryManager()
 
     def summary(self):
 
-        if not os.path.exists(self.log_file):
+        h = self.history.summary()
 
-            return {
+        total = h["trade"]
+        win = h["win"]
+        loss = h["loss"]
+        gross_profit = h["gross_profit"]
+        gross_loss = h["gross_loss"]
 
-                "total_trade": 0,
-                "win": 0,
-                "loss": 0,
-
-                "win_rate": 0,
-
-                "gross_profit": 0,
-                "gross_loss": 0,
-                "net_profit": 0,
-
-                "profit_factor": 0,
-
-                "avg_win": 0,
-                "avg_loss": 0,
-
-                "largest_win": 0,
-                "largest_loss": 0
-
-            }
-
-        df = pd.read_csv(self.log_file)
-
-        if "profit" not in df.columns:
-
-            return {
-
-                "total_trade": len(df),
-                "win": 0,
-                "loss": 0,
-
-                "win_rate": 0,
-
-                "gross_profit": 0,
-                "gross_loss": 0,
-                "net_profit": 0,
-
-                "profit_factor": 0,
-
-                "avg_win": 0,
-                "avg_loss": 0,
-
-                "largest_win": 0,
-                "largest_loss": 0
-
-            }
-
-        profit = df["profit"].fillna(0)
-
-        win = profit[profit > 0]
-        loss = profit[profit < 0]
-
-        total = len(profit)
-
-        gross_profit = win.sum()
-
-        gross_loss = abs(loss.sum())
-
-        if gross_loss == 0:
-
-            pf = 0
-
-        else:
-
-            pf = gross_profit / gross_loss
+        pf = 0
+        if gross_loss > 0:
+            pf = round(gross_profit / gross_loss, 2)
 
         return {
-
             "total_trade": total,
-
-            "win": len(win),
-
-            "loss": len(loss),
-
-            "win_rate":
-                (len(win) / total * 100)
-                if total > 0 else 0,
-
+            "win": win,
+            "loss": loss,
+            "win_rate": h["win_rate"],
             "gross_profit": gross_profit,
-
             "gross_loss": gross_loss,
-
-            "net_profit": gross_profit - gross_loss,
-
+            "net_profit": h["profit"],
             "profit_factor": pf,
-
-            "avg_win":
-                win.mean() if len(win) else 0,
-
-            "avg_loss":
-                loss.mean() if len(loss) else 0,
-
-            "largest_win":
-                win.max() if len(win) else 0,
-
-            "largest_loss":
-                loss.min() if len(loss) else 0
-
+            "avg_win": round(gross_profit / win, 2) if win else 0,
+            "avg_loss": round(gross_loss / loss, 2) if loss else 0,
+            "largest_win": h["largest_win"],
+            "largest_loss": h["largest_loss"]
         }

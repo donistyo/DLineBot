@@ -5,13 +5,15 @@ from app.trading.volatility_filter import VolatilityFilter
 
 class TradeFilter:
 
-    def __init__(self):
+    def __init__(self, max_spread=80, min_atr=5, start_hour=7, end_hour=21):
 
-        self.session_filter = SessionFilter()
+        self.session_filter = SessionFilter(
+            start_hour=start_hour, end_hour=end_hour
+        )
 
-        self.spread_filter = SpreadFilter()
+        self.spread_filter = SpreadFilter(max_spread=max_spread)
 
-        self.volatility_filter = VolatilityFilter()
+        self.volatility_filter = VolatilityFilter(min_atr=min_atr)
 
     def allow(self, market):
 

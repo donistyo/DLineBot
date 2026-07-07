@@ -77,8 +77,8 @@ def main():
 
     df = collector.load(
         symbol="XAUUSD",
-        timeframe="H1",
-        bars=500
+        timeframe="M1",
+        bars=2000
     )
 
     print("✓ Data berhasil diambil")
@@ -129,7 +129,7 @@ def main():
     dataset_path = dataset.save(
         df,
         "XAUUSD",
-        "H1"
+        "M1"
     )
 
     print(f"\n✓ Dataset disimpan : {dataset_path}")
@@ -365,7 +365,7 @@ def main():
     files = report_manager.export_all(
         report=report,
         symbol="XAUUSD",
-        timeframe="H1"
+        timeframe="M1"
     )
 
     print()
@@ -434,7 +434,7 @@ def main():
         report,
         performance,
         symbol="XAUUSD",
-        timeframe="H1"
+        timeframe="M1"
     )
 
     webbrowser.open(
@@ -470,7 +470,7 @@ def main():
 
     model_path = model_manager.save(
         model,
-        "xgboost_xauusd_h1.joblib"
+        "xgboost_xauusd_m1.joblib"
     )
 
     print(f"\n✓ Model disimpan : {model_path}")

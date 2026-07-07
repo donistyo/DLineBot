@@ -1,6 +1,6 @@
 from datetime import datetime
 from app.database.session import SessionLocal
-from app.database.models import TradeLog, EquitySnapshot
+from app.database.models import TradeLog, EquitySnapshot, LearningRecord
 
 
 def _parse_time(val):
@@ -37,6 +37,8 @@ class DatabaseLogger:
             stop_loss=trade_data.get("stop_loss"),
             take_profit=trade_data.get("take_profit"),
             lot_size=trade_data.get("lot_size"),
+            profit=trade_data.get("profit"),
+            ticket=trade_data.get("ticket"),
             created_at=datetime.now()
         )
         self.db.add(entry)
@@ -56,6 +58,28 @@ class DatabaseLogger:
         self.db.add(entry)
         self.db.commit()
 
+    def log_learning_record(self, record_data):
+        entry = LearningRecord(
+            symbol=record_data.get("symbol", "XAUUSD"),
+            signal=record_data.get("signal"),
+            confidence=record_data.get("confidence"),
+            entry_price=record_data.get("entry_price"),
+            status="PENDING",
+            entry_time=datetime.now()
+        )
+        self.db.add(entry)
+        self.db.commit()
+        return entry.id
+
+    def update_learning_record(self, record_id, profit, exit_price):
+        rec = self.db.query(LearningRecord).filter_by(id=record_id).first()
+        if rec:
+            rec.profit = profit
+            rec.exit_price = exit_price
+            rec.status = "CLOSED"
+            rec.close_time = datetime.now()
+            self.db.commit()
+
     def get_recent_trades(self, limit=20):
 
         return (
@@ -72,4 +96,12 @@ class DatabaseLogger:
             self.db.query(TradeLog)
             .filter(TradeLog.created_at >= today)
             .count()
+        )
+
+    def get_learning_records(self, limit=50):
+        return (
+            self.db.query(LearningRecord)
+            .order_by(LearningRecord.id.desc())
+            .limit(limit)
+            .all()
         )

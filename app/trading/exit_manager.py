@@ -3,11 +3,11 @@ from app.mt5.position_controller import PositionController
 
 class ExitManager:
 
-    def __init__(self):
+    def __init__(self, min_confidence=0.75):
 
         self.controller = PositionController()
 
-        self.min_confidence = 0.75
+        self.min_confidence = min_confidence
 
     def process(
 

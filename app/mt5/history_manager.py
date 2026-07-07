@@ -3,6 +3,8 @@ import MetaTrader5 as mt5
 
 from app.mt5.session import MT5Session
 
+DEAL_ENTRY_OUT = 1
+
 
 class HistoryManager:
 
@@ -11,7 +13,7 @@ class HistoryManager:
         MT5Session.ensure_connection()
 
     # =====================================
-    # Get Today Deals
+    # Get Today Closed Trades
     # =====================================
 
     def today(self):
@@ -34,7 +36,13 @@ class HistoryManager:
         if deals is None:
             return []
 
-        return list(deals)
+        trades = [
+            d for d in deals
+            if d.type in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL)
+            and d.entry == DEAL_ENTRY_OUT
+        ]
+
+        return list(trades)
 
     # =====================================
     # Summary

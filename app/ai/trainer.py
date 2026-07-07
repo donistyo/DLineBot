@@ -31,14 +31,16 @@ class XGBoostTrainer:
     def train(
         self,
         X_train,
-        y_train
+        y_train,
+        sample_weight=None
     ):
 
         logger.info("Training XGBoost...")
 
         self.model.fit(
             X_train,
-            y_train
+            y_train,
+            sample_weight=sample_weight
         )
 
         logger.info("Training selesai")
