@@ -135,6 +135,7 @@ class FundamentalTrader:
             print(f"TP2    : {tp2}")
             print(f"Status : {'OK' if not self.dry_run else 'DRY RUN'}")
 
+            result["status"] = "DRY_RUN" if self.dry_run else "SUCCESS"
             if not self.dry_run:
                 self.order.notify_telegram(result)
 

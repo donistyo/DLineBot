@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, date
 from pathlib import Path
 import json
+import time
+import functools
 from app.database.session import db_session
 from app.database.models import TradeLog, EquitySnapshot
 from app.mt5.session import MT5Session
@@ -12,6 +14,46 @@ from app.notification.telegram_notifier import TelegramNotifier
 from app.trading.trade_learner import TradeLearner
 from app.trading.analytics import Analytics
 from app.trading.model_version import ModelVersionManager
+
+# =====================================
+# Simple in-memory cache (N seconds)
+# =====================================
+
+class _Cache:
+    def __init__(self, ttl=5):
+        self._data = {}
+        self._ttl = ttl
+
+    def get(self, key):
+        if key in self._data:
+            val, ts = self._data[key]
+            if time.time() - ts < self._ttl:
+                return val
+        return None
+
+    def set(self, key, value):
+        self._data[key] = (value, time.time())
+
+    def clear(self):
+        self._data.clear()
+
+
+_cache = _Cache(ttl=5)
+
+
+def cached(ttl=5):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            key = f"{func.__name__}:{args}:{sorted(kwargs.items())}"
+            cached = _cache.get(key)
+            if cached is not None:
+                return cached
+            result = func(*args, **kwargs)
+            _cache.set(key, result)
+            return result
+        return wrapper
+    return decorator
+
 
 app = FastAPI(title="DLineBot Dashboard")
 app.add_middleware(
@@ -23,6 +65,7 @@ app.add_middleware(
 
 
 @app.get("/api/trades")
+@cached(ttl=5)
 def get_trades(limit=50):
     with db_session() as db:
         trades = (
@@ -51,6 +94,7 @@ def get_trades(limit=50):
 
 
 @app.get("/api/equity")
+@cached(ttl=5)
 def get_equity(limit=100):
     with db_session() as db:
         snapshots = (
@@ -91,12 +135,14 @@ def get_overview():
 
 
 @app.get("/api/learning")
+@cached(ttl=5)
 def get_learning():
     learner = TradeLearner()
     return learner.get_learning_stats()
 
 
 @app.get("/api/scalping")
+@cached(ttl=5)
 def get_scalping():
     path = Path("runtime/scalping.json")
     if not path.exists():
@@ -123,67 +169,80 @@ analytics = Analytics()
 
 
 @app.get("/api/analytics/win_rate")
+@cached(ttl=10)
 def api_win_rate():
     return analytics.win_rate()
 
 
 @app.get("/api/analytics/monthly_profit")
+@cached(ttl=10)
 def api_monthly_profit(months=6):
     return analytics.monthly_profit(months)
 
 
 @app.get("/api/analytics/drawdown_curve")
+@cached(ttl=10)
 def api_drawdown_curve(limit=100):
     return analytics.drawdown_curve(limit)
 
 
 @app.get("/api/analytics/trade_distribution")
+@cached(ttl=10)
 def api_trade_distribution():
     return analytics.trade_distribution()
 
 
 @app.get("/api/analytics/signal_distribution")
+@cached(ttl=10)
 def api_signal_distribution():
     return analytics.signal_distribution()
 
 
 @app.get("/api/analytics/confidence_histogram")
+@cached(ttl=10)
 def api_confidence_histogram():
     return analytics.confidence_histogram()
 
 
 @app.get("/api/analytics/hour_performance")
+@cached(ttl=10)
 def api_hour_performance():
     return analytics.hour_performance()
 
 
 @app.get("/api/analytics/session_performance")
+@cached(ttl=10)
 def api_session_performance():
     return analytics.session_performance()
 
 
 @app.get("/api/analytics/heatmap")
+@cached(ttl=10)
 def api_heatmap():
     return analytics.heatmap()
 
 
 @app.get("/api/analytics/ai_accuracy")
+@cached(ttl=10)
 def api_ai_accuracy():
     return analytics.ai_accuracy()
 
 
 @app.get("/api/analytics/feature_importance")
+@cached(ttl=30)
 def api_feature_importance():
     learner = TradeLearner()
     return learner.get_feature_importance()
 
 
 @app.get("/api/analytics/learning_progress")
+@cached(ttl=10)
 def api_learning_progress():
     return analytics.learning_progress()
 
 
 @app.get("/api/model_version")
+@cached(ttl=30)
 def api_model_version():
     mvm = ModelVersionManager()
     return mvm.get_info()
@@ -598,18 +657,20 @@ async function fetchData() {
 
 async function fetchAnalytics() {
   try {
-    const wr = await fetch('/api/analytics/win_rate').then(r=>r.json());
-    const monthly = await fetch('/api/analytics/monthly_profit?months=6').then(r=>r.json());
-    const dd = await fetch('/api/analytics/drawdown_curve?limit=100').then(r=>r.json());
-    const td = await fetch('/api/analytics/trade_distribution').then(r=>r.json());
-    const sd = await fetch('/api/analytics/signal_distribution').then(r=>r.json());
-    const ch = await fetch('/api/analytics/confidence_histogram').then(r=>r.json());
-    const hp = await fetch('/api/analytics/hour_performance').then(r=>r.json());
-    const sp = await fetch('/api/analytics/session_performance').then(r=>r.json());
-    const acc = await fetch('/api/analytics/ai_accuracy').then(r=>r.json());
-    const lp = await fetch('/api/analytics/learning_progress').then(r=>r.json());
-    const mv = await fetch('/api/model_version').then(r=>r.json());
-    const hm = await fetch('/api/analytics/heatmap').then(r=>r.json());
+    const [wr, monthly, dd, td, sd, ch, hp, sp, acc, lp, mv, hm] = await Promise.all([
+      fetchJson('/api/analytics/win_rate', {}),
+      fetchJson('/api/analytics/monthly_profit?months=6', []),
+      fetchJson('/api/analytics/drawdown_curve?limit=100', []),
+      fetchJson('/api/analytics/trade_distribution', {buy:0,sell:0,hold:0}),
+      fetchJson('/api/analytics/signal_distribution', {buy:0,sell:0}),
+      fetchJson('/api/analytics/confidence_histogram', {}),
+      fetchJson('/api/analytics/hour_performance', []),
+      fetchJson('/api/analytics/session_performance', {}),
+      fetchJson('/api/analytics/ai_accuracy', {accuracy:0,total:0}),
+      fetchJson('/api/analytics/learning_progress', []),
+      fetchJson('/api/model_version', {current_version:'-',training_date:'-'}),
+      fetchJson('/api/analytics/heatmap', [])
+    ]);
 
     document.getElementById('winRateBox').innerHTML = `
       <div class="card"><div class="lbl">Total Trades</div><div class="val">${wr.total}</div></div>
@@ -756,9 +817,9 @@ async function fetchLearningRecords() {
 }
 
 fetchData();
-setInterval(fetchData, 10000);
-setInterval(() => { if (analyticsLoaded) fetchAnalytics(); }, 15000);
-setInterval(() => { if (learningLoaded) fetchLearningRecords(); }, 20000);
+setInterval(fetchData, 15000);
+setInterval(() => { if (analyticsLoaded && document.getElementById('tab-analytics').style.display !== 'none') fetchAnalytics(); }, 30000);
+setInterval(() => { if (learningLoaded && document.getElementById('tab-learning').style.display !== 'none') fetchLearningRecords(); }, 45000);
 </script>
 </body>
 </html>"""
