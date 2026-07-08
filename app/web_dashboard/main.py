@@ -43,12 +43,15 @@ _cache = _Cache(default_ttl=5)
 
 def cached(ttl=5):
     def decorator(func):
-        def wrapper(*args, **kwargs):
-            key = f"{func.__name__}:{args}:{sorted(kwargs.items())}"
+        import functools
+
+        @functools.wraps(func)
+        def wrapper(*_args, **_kwargs):
+            key = f"{func.__name__}:{_args}:{sorted(_kwargs.items())}"
             cached = _cache.get(key)
             if cached is not None:
                 return cached
-            result = func(*args, **kwargs)
+            result = func(*_args, **_kwargs)
             _cache.set(key, result, ttl)
             return result
         return wrapper
