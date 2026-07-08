@@ -20,25 +20,25 @@ from app.trading.model_version import ModelVersionManager
 # =====================================
 
 class _Cache:
-    def __init__(self, ttl=5):
+    def __init__(self, default_ttl=5):
         self._data = {}
-        self._ttl = ttl
+        self._default_ttl = default_ttl
 
     def get(self, key):
         if key in self._data:
-            val, ts = self._data[key]
-            if time.time() - ts < self._ttl:
+            val, ts, ttl = self._data[key]
+            if time.time() - ts < ttl:
                 return val
         return None
 
-    def set(self, key, value):
-        self._data[key] = (value, time.time())
+    def set(self, key, value, ttl=None):
+        self._data[key] = (value, time.time(), ttl or self._default_ttl)
 
     def clear(self):
         self._data.clear()
 
 
-_cache = _Cache(ttl=5)
+_cache = _Cache(default_ttl=5)
 
 
 def cached(ttl=5):
@@ -49,7 +49,7 @@ def cached(ttl=5):
             if cached is not None:
                 return cached
             result = func(*args, **kwargs)
-            _cache.set(key, result)
+            _cache.set(key, result, ttl)
             return result
         return wrapper
     return decorator
@@ -116,6 +116,7 @@ def get_equity(limit=100):
 
 
 @app.get("/api/overview")
+@cached(ttl=3)
 def get_overview():
     path = Path("runtime/overview.json")
     if path.exists():
@@ -562,7 +563,7 @@ function makeChart(id, type, labels, datasets, opts) {
   });
 }
 
-async function fetchJson(url, fallback, timeoutMs=2500) {
+async function fetchJson(url, fallback, timeoutMs=8000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -637,10 +638,10 @@ async function fetchData() {
     document.getElementById('trades').innerHTML = trades.map(t => '<tr><td style="font-size:10px">'+(t.time?.split(' ')[1]||t.time)+'</td><td><span class="badge '+(t.signal||'').toLowerCase()+'">'+t.signal+'</span></td><td>'+t.confidence+'%</td><td>'+t.action+'</td><td>'+t.status+'</td><td>'+(t.entry_price||'-')+'</td><td class="'+(t.profit>0?'green':t.profit<0?'red':'')+'">'+((t.profit!=null)?'$'+t.profit.toFixed(2):'-')+'</td><td>'+(t.lot_size||'-')+'</td></tr>').join('');
 
     document.getElementById('learningBox').innerHTML = `
-      <div class="card"><div class="lbl">Total Samples</div><div class="val">${learning.total}</div></div>
-      <div class="card"><div class="lbl">Win</div><div class="val green">${learning.win}</div></div>
-      <div class="card"><div class="lbl">Loss</div><div class="val red">${learning.loss}</div></div>
-      <div class="card"><div class="lbl">Win Rate</div><div class="val yellow">${learning.win_rate}%</div></div>
+      <div class="card"><div class="lbl">Total Samples</div><div class="val">${learning.total??0}</div></div>
+      <div class="card"><div class="lbl">Win</div><div class="val green">${learning.win??0}</div></div>
+      <div class="card"><div class="lbl">Loss</div><div class="val red">${learning.loss??0}</div></div>
+      <div class="card"><div class="lbl">Win Rate</div><div class="val yellow">${learning.win_rate??0}%</div></div>
     `;
 
     if (equity.length > 0) {
@@ -673,10 +674,10 @@ async function fetchAnalytics() {
     ]);
 
     document.getElementById('winRateBox').innerHTML = `
-      <div class="card"><div class="lbl">Total Trades</div><div class="val">${wr.total}</div></div>
-      <div class="card"><div class="lbl">Win</div><div class="val green">${wr.win}</div></div>
-      <div class="card"><div class="lbl">Loss</div><div class="val red">${wr.loss}</div></div>
-      <div class="card"><div class="lbl">Win Rate</div><div class="val yellow">${wr.win_rate}%</div></div>
+      <div class="card"><div class="lbl">Total Trades</div><div class="val">${wr.total??0}</div></div>
+      <div class="card"><div class="lbl">Win</div><div class="val green">${wr.win??0}</div></div>
+      <div class="card"><div class="lbl">Loss</div><div class="val red">${wr.loss??0}</div></div>
+      <div class="card"><div class="lbl">Win Rate</div><div class="val yellow">${wr.win_rate??0}%</div></div>
     `;
 
     if (monthly.length > 0) {
@@ -717,7 +718,7 @@ async function fetchAnalytics() {
 
     const cm = acc.confusion_matrix || {};
     document.getElementById('accuracyBox').innerHTML = `
-      <div class="card"><div class="lbl">AI Accuracy</div><div class="val ${acc.accuracy>=50?'green':'red'}">${acc.accuracy}%</div></div>
+      <div class="card"><div class="lbl">AI Accuracy</div><div class="val ${(acc.accuracy||0)>=50?'green':'red'}">${acc.accuracy??0}%</div></div>
       <div class="card"><div class="lbl">TP / FP</div><div class="val green">${cm.tp||0}</div><div class="lbl red">${cm.fp||0}</div></div>
       <div class="card"><div class="lbl">FN / TN</div><div class="val red">${cm.fn||0}</div><div class="lbl green">${cm.tn||0}</div></div>
       <div class="card"><div class="lbl">Total Predictions</div><div class="val">${acc.total}</div></div>
