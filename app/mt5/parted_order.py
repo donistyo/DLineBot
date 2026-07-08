@@ -55,9 +55,24 @@ class PartedOrder:
             raise PartedOrderError("Signal harus BUY atau SELL")
 
         point = info.point
+        requested_entry = entry_price
+
+        market_price = tick.ask if signal == "BUY" else tick.bid
+        market_price = round(market_price / point) * point
+
         if entry_price is None:
-            entry_price = tick.ask if signal == "BUY" else tick.bid
+            entry_price = market_price
+        else:
             entry_price = round(entry_price / point) * point
+            diff = abs(entry_price - market_price)
+            if diff > point * 10:
+                print()
+                print("WARNING: Entry manual berbeda dari harga market!")
+                print(f"  Entry manual : {entry_price}")
+                print(f"  Harga market : {market_price}")
+                print(f"  Selisih      : {diff / point:.0f} pts")
+                print("  Market order akan pakai harga market (ask/bid saat ini)")
+                print()
 
         if stop_loss is None:
             sl_distance = 500 * point
@@ -74,6 +89,8 @@ class PartedOrder:
             take_profit2 = entry_price + tp2_distance if signal == "BUY" else entry_price - tp2_distance
             take_profit2 = round(take_profit2 / point) * point
 
+        exec_price = market_price
+
         vol1, vol2 = self._split_volume(volume)
 
         print()
@@ -83,7 +100,8 @@ class PartedOrder:
         print(f"Total Lot  : {volume}")
         print(f"  Lot 1    : {vol1}  -> TP1 {take_profit1}")
         print(f"  Lot 2    : {vol2}  -> TP2 {take_profit2}")
-        print(f"Entry      : {entry_price}")
+        print(f"Entry rekam: {requested_entry or exec_price}")
+        print(f"Exec price : {exec_price}")
         print(f"SL         : {stop_loss}")
         print()
 
@@ -93,11 +111,11 @@ class PartedOrder:
             print("[DRY RUN] Order 1 & 2 tidak dikirim ke MT5")
         else:
             if signal == "BUY":
-                req1 = OrderBuilder.buy(symbol, vol1, entry_price, stop_loss, take_profit1, magic, comment)
-                req2 = OrderBuilder.buy(symbol, vol2, entry_price, stop_loss, take_profit2, magic, comment)
+                req1 = OrderBuilder.buy(symbol, vol1, exec_price, stop_loss, take_profit1, magic, comment)
+                req2 = OrderBuilder.buy(symbol, vol2, exec_price, stop_loss, take_profit2, magic, comment)
             else:
-                req1 = OrderBuilder.sell(symbol, vol1, entry_price, stop_loss, take_profit1, magic, comment)
-                req2 = OrderBuilder.sell(symbol, vol2, entry_price, stop_loss, take_profit2, magic, comment)
+                req1 = OrderBuilder.sell(symbol, vol1, exec_price, stop_loss, take_profit1, magic, comment)
+                req2 = OrderBuilder.sell(symbol, vol2, exec_price, stop_loss, take_profit2, magic, comment)
 
             result1 = self.sender.send(req1)
             result2 = self.sender.send(req2)
