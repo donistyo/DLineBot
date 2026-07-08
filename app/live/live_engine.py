@@ -633,6 +633,7 @@ class LiveEngine:
             Path("runtime").mkdir(exist_ok=True)
             with open("runtime/scalping.json", "w") as f:
                 json.dump(scalp_result, f, default=str, indent=2)
+            self._scalp_result = scalp_result
 
             # ===============================
             # Decision
@@ -1083,6 +1084,7 @@ class LiveEngine:
                 "equity_snapshots": _equity_list,
                 "learning": {"total": lr_stats['total'], "win": lr_stats.get('win', _win),
                             "loss": lr_stats.get('loss', _loss), "win_rate": lr_stats['win_rate']},
+                "scalping": getattr(self, '_scalp_result', None),
             }
             Path("runtime").mkdir(exist_ok=True)
             with open("runtime/overview.json", "w") as f:

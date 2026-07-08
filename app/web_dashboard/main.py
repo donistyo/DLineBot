@@ -132,6 +132,9 @@ def get_overview():
         "signal": "-", "confidence": 0, "trade": "NO", "score": "-",
         "open_positions": [], "open_count": 0,
         "trades_today": 0, "profit_today": 0,
+        "trades": [], "equity_snapshots": [],
+        "learning": {"total": 0, "win": 0, "loss": 0, "win_rate": 0},
+        "scalping": None,
     }
 
 
@@ -578,11 +581,11 @@ async function fetchJson(url, fallback, timeoutMs=8000) {
 
 async function fetchData() {
   try {
-    const overview = await fetchJson('/api/overview', {balance:0,equity:0,floating_pl:0,drawdown:0,trades_today:0,open_count:0,open_positions:[],trades:[],equity_snapshots:[],learning:{total:0,win:0,loss:0,win_rate:0},server_time:'loading...'});
+    const overview = await fetchJson('/api/overview', {balance:0,equity:0,floating_pl:0,drawdown:0,trades_today:0,open_count:0,open_positions:[],trades:[],equity_snapshots:[],learning:{total:0,win:0,loss:0,win_rate:0},scalping:null,server_time:'loading...'});
     const trades = overview.trades || [];
     const equity = overview.equity_snapshots || [];
     const learning = overview.learning || {};
-    const scalping = await fetchJson('/api/scalping', {scalp_score:{score:0,grade:'-',direction:'WAIT',action:'WAIT'}});
+    const scalping = overview.scalping || {};
 
     document.getElementById('serverTime').textContent = overview.server_time || '';
 
