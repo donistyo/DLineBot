@@ -6,6 +6,9 @@ from pathlib import Path
 import json
 from app.database.session import db_session
 from app.database.models import TradeLog, EquitySnapshot
+from app.mt5.session import MT5Session
+from app.mt5.parted_order import PartedOrder
+from app.notification.telegram_notifier import TelegramNotifier
 from app.trading.trade_learner import TradeLearner
 from app.trading.analytics import Analytics
 from app.trading.model_version import ModelVersionManager
@@ -186,6 +189,73 @@ def api_model_version():
     return mvm.get_info()
 
 
+# =====================================
+# Manual Order API
+# =====================================
+
+@app.post("/api/order/manual")
+def api_manual_order(data: dict):
+    symbol = data.get("symbol", "XAUUSDc")
+    signal = data.get("signal", "BUY").upper()
+    volume = float(data.get("volume", 0.01))
+    entry = float(data["entry"]) if data.get("entry") else None
+    sl = float(data["sl"]) if data.get("sl") else None
+    tp1 = float(data["tp1"]) if data.get("tp1") else None
+    tp2 = float(data["tp2"]) if data.get("tp2") else None
+
+    MT5Session.connect()
+    try:
+        order = PartedOrder(dry_run=False)
+        result = order.execute(symbol, signal, volume, entry, sl, tp1, tp2)
+        order.notify_telegram(result)
+        return {"success": True, "result": result}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/order/dry-run")
+def api_dry_run(data: dict):
+    symbol = data.get("symbol", "XAUUSDc")
+    signal = data.get("signal", "BUY").upper()
+    volume = float(data.get("volume", 0.01))
+    entry = float(data["entry"]) if data.get("entry") else None
+    sl = float(data["sl"]) if data.get("sl") else None
+    tp1 = float(data["tp1"]) if data.get("tp1") else None
+    tp2 = float(data["tp2"]) if data.get("tp2") else None
+
+    order = PartedOrder(dry_run=True)
+    result = order.execute(symbol, signal, volume, entry, sl, tp1, tp2)
+    return {"success": True, "result": result}
+
+
+@app.get("/api/order/parted")
+def api_get_parted_orders(limit=20):
+    with db_session() as db:
+        trades = (
+            db.query(TradeLog)
+            .filter(TradeLog.action.like("%TP%"))
+            .order_by(TradeLog.id.desc())
+            .limit(limit)
+            .all()
+        )
+    return [
+        {
+            "id": t.id,
+            "time": str(t.time),
+            "symbol": t.symbol,
+            "signal": t.signal,
+            "action": t.action,
+            "entry_price": t.entry_price,
+            "stop_loss": t.stop_loss,
+            "take_profit": t.take_profit,
+            "lot_size": t.lot_size,
+            "status": t.status,
+            "ticket": t.ticket,
+        }
+        for t in trades
+    ]
+
+
 @app.get("/api/analytics/summary")
 def api_analytics_summary():
     wr = analytics.win_rate()
@@ -269,6 +339,7 @@ tr:hover { background:#1e3a5f; }
   <button class="tab-btn active" onclick="switchTab('main',this)">Overview</button>
   <button class="tab-btn" onclick="switchTab('analytics',this)">Analytics</button>
   <button class="tab-btn" onclick="switchTab('learning',this)">AI Learning</button>
+  <button class="tab-btn" onclick="switchTab('manual',this)">Manual Order</button>
 </div>
 
 <div id="tab-main">
@@ -333,6 +404,38 @@ tr:hover { background:#1e3a5f; }
 
 </div>
 
+<div id="tab-manual" style="display:none">
+
+<h2>Manual Order - SL, TP1, TP2</h2>
+<div style="background:#1e293b;border-radius:6px;padding:16px;max-width:500px">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div><label style="font-size:11px;color:#94a3b8">Symbol</label><br><input id="mo_symbol" value="XAUUSDc" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">Signal</label><br>
+      <select id="mo_signal" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
+        <option value="BUY">BUY</option>
+        <option value="SELL">SELL</option>
+      </select>
+    </div>
+    <div><label style="font-size:11px;color:#94a3b8">Lot</label><br><input id="mo_volume" value="0.01" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">Entry (kosongkan = auto)</label><br><input id="mo_entry" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">Stop Loss</label><br><input id="mo_sl" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">Take Profit 1</label><br><input id="mo_tp1" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div style="grid-column:span 2"><label style="font-size:11px;color:#94a3b8">Take Profit 2</label><br><input id="mo_tp2" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+  </div>
+  <div style="margin-top:12px;display:flex;gap:8px">
+    <button onclick="sendManualOrder(false)" style="flex:1;padding:8px;background:#38bdf8;color:#0f172a;border:none;border-radius:4px;font-weight:600;cursor:pointer">KIRIM ORDER</button>
+    <button onclick="sendManualOrder(true)" style="padding:8px;background:#334155;color:#94a3b8;border:none;border-radius:4px;cursor:pointer">Dry Run</button>
+  </div>
+  <div id="mo_result" style="margin-top:12px;font-size:12px;color:#6ee7b7"></div>
+</div>
+
+<h2>Parted Order History (TP1/TP2)</h2>
+<table><thead><tr>
+  <th>Time</th><th>Sym</th><th>Sig</th><th>Action</th><th>Entry</th><th>SL</th><th>TP</th><th>Lot</th><th>Status</th><th>Ticket</th>
+</tr></thead><tbody id="partedOrders"></tbody></table>
+
+</div>
+
 <div id="tab-learning" style="display:none">
 
 <h2>AI Learning Status</h2>
@@ -366,6 +469,9 @@ function switchTab(name, el) {
   if (name === 'analytics' && !analyticsLoaded) {
     analyticsLoaded = true;
     fetchAnalytics();
+  }
+  if (name === 'manual') {
+    fetchPartedOrders();
   }
   if (name === 'learning' && !learningLoaded) {
     learningLoaded = true;
@@ -580,6 +686,54 @@ async function fetchAnalytics() {
     }
 
   } catch(e) { console.error('Analytics error:', e); }
+}
+
+async function fetchPartedOrders() {
+  try {
+    const data = await fetchJson('/api/order/parted?limit=20', []);
+    document.getElementById('partedOrders').innerHTML = data.map(t => '<tr><td style="font-size:10px">'+(t.time?.split(' ')[1]||t.time)+'</td><td>'+t.symbol+'</td><td><span class="badge '+(t.signal||'').toLowerCase()+'">'+t.signal+'</span></td><td>'+t.action+'</td><td>'+(t.entry_price||'-')+'</td><td>'+(t.stop_loss||'-')+'</td><td>'+(t.take_profit||'-')+'</td><td>'+t.lot_size+'</td><td>'+(t.status||'-')+'</td><td>'+(t.ticket||'-')+'</td></tr>').join('');
+  } catch(e) { console.error('Parted orders error:', e); }
+}
+
+function sendManualOrder(dryRun) {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  const payload = {
+    symbol: document.getElementById('mo_symbol').value,
+    signal: document.getElementById('mo_signal').value,
+    volume: parseFloat(document.getElementById('mo_volume').value) || 0.01,
+    entry: document.getElementById('mo_entry').value || null,
+    sl: document.getElementById('mo_sl').value || null,
+    tp1: document.getElementById('mo_tp1').value || null,
+    tp2: document.getElementById('mo_tp2').value || null,
+  };
+  const url = dryRun ? '/api/order/dry-run' : '/api/order/manual';
+  fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) })
+    .then(r=>r.json())
+    .then(data => {
+      const el = document.getElementById('mo_result');
+      if (data.success) {
+        el.style.color = '#6ee7b7';
+        const r = data.result;
+        if (dryRun) {
+          el.innerHTML = 'DRY RUN OK - ' + r.signal + ' ' + r.volume + ' lot @ ' + r.entry_price;
+        } else {
+          const t1 = r.result_1?.order || '-';
+          const t2 = r.result_2?.order || '-';
+          el.innerHTML = 'ORDER SENT - Ticket: ' + t1 + ' / ' + t2;
+        }
+        fetchPartedOrders();
+      } else {
+        el.style.color = '#fca5a5';
+        el.textContent = 'FAILED: ' + (data.error || 'Unknown error');
+      }
+    })
+    .catch(err => {
+      document.getElementById('mo_result').style.color = '#fca5a5';
+      document.getElementById('mo_result').textContent = 'Error: ' + err.message;
+    })
+    .finally(() => { btn.disabled = false; btn.textContent = dryRun ? 'Dry Run' : 'KIRIM ORDER'; });
 }
 
 async function fetchLearningRecords() {

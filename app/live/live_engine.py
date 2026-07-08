@@ -84,6 +84,7 @@ from app.strategy.daily_trend_view import DailyTrendView
 from app.live.multi_tf_view import MultiTFView
 from app.live.score_view import ScoreView
 from app.trading.learning_manager import LearningManager
+from app.trading.fundamental_trader import FundamentalTrader
 
 
 class LiveEngine:
@@ -336,8 +337,15 @@ class LiveEngine:
             notifier=self.telegram
         )
 
+        self.fundamental_trader = FundamentalTrader(
+            symbol=symbol,
+            dry_run=dry_run,
+            cooldown_minutes=60
+        )
+
         self.last_candle_time = None
         self.last_signal_time = None
+        self.last_fundamental_trade_time = None
         self.daily_fundamental = DailyTrendEngine()
         self.daily_fundamental.update(
             bias="STRONG BULLISH",
@@ -350,6 +358,8 @@ class LiveEngine:
                 "NFP lebih lemah dari perkiraan"
             ]
         )
+
+        self.fundamental_trader.engine = self.daily_fundamental
 
         print()
         print("=" * 60)
@@ -578,6 +588,22 @@ class LiveEngine:
                         f"- {r}" for r in fundamental["reasons"]
                     )
                 self.telegram.send(signal_text)
+
+                # -------------------------------------------------
+                # 15-Minute Fundamental Trade Execution
+                # -------------------------------------------------
+                ft_result = self.fundamental_trader.execute()
+                if ft_result and ft_result["status"] not in ("SKIPPED", "ERROR"):
+                    print()
+                    print("=" * 60)
+                    print("FUNDAMENTAL TRADE EXECUTED")
+                    print("=" * 60)
+                    print(f"Signal : {ft_result['signal']}")
+                    print(f"Lot    : {ft_result['volume']}")
+                    print(f"Entry  : {ft_result['entry_price']}")
+                    print(f"SL     : {ft_result['stop_loss']}")
+                    print(f"TP1    : {ft_result['take_profit1']}")
+                    print(f"TP2    : {ft_result['take_profit2']}")
 
             # ===============================
             # Prediction
