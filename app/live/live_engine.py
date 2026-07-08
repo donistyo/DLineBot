@@ -1031,7 +1031,7 @@ class LiveEngine:
                 "learning": f"{lr_stats['total']} ({lr_stats['win_rate']}%)"
             }
 
-            # ---- Write overview snapshot for dashboard ----
+            # ---- Write comprehensive dashboard data ----
             open_positions = []
             if positions:
                 for p in positions:
@@ -1046,6 +1046,32 @@ class LiveEngine:
                         "sl": p.sl,
                         "tp": p.tp,
                     })
+
+            from app.database.session import db_session
+            from app.database.models import TradeLog, EquitySnapshot
+            _trades_list = []
+            _equity_list = []
+            with db_session() as _db:
+                for t in _db.query(TradeLog).order_by(TradeLog.id.desc()).limit(20).all():
+                    _trades_list.append({
+                        "id": t.id, "time": str(t.time), "symbol": t.symbol,
+                        "signal": t.signal, "confidence": round(t.confidence * 100, 1) if t.confidence else 0,
+                        "action": t.action, "status": t.status, "reason": t.reason,
+                        "entry_price": t.entry_price, "stop_loss": t.stop_loss,
+                        "take_profit": t.take_profit, "lot_size": t.lot_size,
+                        "profit": t.profit,
+                    })
+                for s in _db.query(EquitySnapshot).order_by(EquitySnapshot.id.desc()).limit(50).all():
+                    _equity_list.append({
+                        "time": str(s.time), "balance": s.balance, "equity": s.equity,
+                        "floating_pl": s.floating_pl, "drawdown": s.drawdown,
+                    })
+                _equity_list.reverse()
+
+            _win = sum(1 for t in _trades_list if t.get("profit") and t["profit"] > 0)
+            _loss = sum(1 for t in _trades_list if t.get("profit") and t["profit"] < 0)
+            _total_trades_db = len(_trades_list)
+
             overview = {
                 "balance": account.get("balance", 0) if account else 0,
                 "equity": account.get("equity", 0) if account else 0,
@@ -1063,6 +1089,10 @@ class LiveEngine:
                 "open_count": len(open_positions),
                 "trades_today": performance.get("total_trade", 0),
                 "profit_today": round(performance.get("net_profit", 0), 2),
+                "trades": _trades_list,
+                "equity_snapshots": _equity_list,
+                "learning": {"total": lr_stats['total'], "win": lr_stats.get('win', _win),
+                            "loss": lr_stats.get('loss', _loss), "win_rate": lr_stats['win_rate']},
             }
             Path("runtime").mkdir(exist_ok=True)
             with open("runtime/overview.json", "w") as f:

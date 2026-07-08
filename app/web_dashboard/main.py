@@ -578,13 +578,11 @@ async function fetchJson(url, fallback, timeoutMs=8000) {
 
 async function fetchData() {
   try {
-    const [overview, trades, equity, learning, scalping] = await Promise.all([
-      fetchJson('/api/overview', {balance:0,equity:0,floating_pl:0,drawdown:0,trades_today:0,open_count:0,open_positions:[],server_time:'loading...'}),
-      fetchJson('/api/trades?limit=20', []),
-      fetchJson('/api/equity?limit=50', []),
-      fetchJson('/api/learning', {total:0,win:0,loss:0,win_rate:0}),
-      fetchJson('/api/scalping', {scalp_score:{score:0,grade:'-',direction:'WAIT',action:'WAIT'}})
-    ]);
+    const overview = await fetchJson('/api/overview', {balance:0,equity:0,floating_pl:0,drawdown:0,trades_today:0,open_count:0,open_positions:[],trades:[],equity_snapshots:[],learning:{total:0,win:0,loss:0,win_rate:0},server_time:'loading...'});
+    const trades = overview.trades || [];
+    const equity = overview.equity_snapshots || [];
+    const learning = overview.learning || {};
+    const scalping = await fetchJson('/api/scalping', {scalp_score:{score:0,grade:'-',direction:'WAIT',action:'WAIT'}});
 
     document.getElementById('serverTime').textContent = overview.server_time || '';
 
