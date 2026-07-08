@@ -80,6 +80,7 @@ from app.notification.telegram_notifier import TelegramNotifier
 from app.database.db_logger import DatabaseLogger
 from app.database.session import init_db
 from app.strategy.daily_trend_engine import DailyTrendEngine
+from app.strategy.real_fundamental_engine import RealFundamentalEngine
 from app.strategy.daily_trend_view import DailyTrendView
 from app.live.multi_tf_view import MultiTFView
 from app.live.score_view import ScoreView
@@ -346,18 +347,7 @@ class LiveEngine:
         self.last_candle_time = None
         self.last_signal_time = None
         self.last_fundamental_trade_time = None
-        self.daily_fundamental = DailyTrendEngine()
-        self.daily_fundamental.update(
-            bias="STRONG BULLISH",
-            confidence=100,
-            score=6,
-            reasons=[
-                "DXY melemah",
-                "US10Y Yield turun",
-                "CPI lebih rendah dari perkiraan",
-                "NFP lebih lemah dari perkiraan"
-            ]
-        )
+        self.daily_fundamental = RealFundamentalEngine(cache_minutes=15)
 
         self.fundamental_trader.engine = self.daily_fundamental
 
