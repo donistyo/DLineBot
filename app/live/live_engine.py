@@ -472,6 +472,8 @@ class LiveEngine:
 
         try:
 
+            self.telegram.handle_updates()
+
             # ===============================
             # Load Market
             # ===============================

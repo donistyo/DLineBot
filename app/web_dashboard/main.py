@@ -349,9 +349,9 @@ HTML_PAGE = """<!DOCTYPE html>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 body { font-family:'Segoe UI',sans-serif; background:#0f172a; color:#e2e8f0; padding:12px; }
-h1 { font-size:20px; margin-bottom:12px; color:#38bdf8; display:flex; align-items:center; gap:10px; }
+h1 { font-size:20px; margin-bottom:12px; color:#f97316; display:flex; align-items:center; gap:10px; }
 h1 small { font-size:13px; color:#64748b; font-weight:400; }
-h2 { font-size:14px; margin:16px 0 6px; color:#94a3b8; border-left:3px solid #38bdf8; padding-left:8px; }
+h2 { font-size:14px; margin:16px 0 6px; color:#94a3b8; border-left:3px solid #f97316; padding-left:8px; }
 .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(130px,1fr)); gap:6px; margin-bottom:8px; }
 .card { background:#1e293b; padding:8px 10px; border-radius:6px; }
 .card .lbl { font-size:10px; color:#64748b; text-transform:uppercase; }
@@ -361,7 +361,7 @@ h2 { font-size:14px; margin:16px 0 6px; color:#94a3b8; border-left:3px solid #38
 .chart-container { background:#1e293b; border-radius:6px; padding:8px; }
 .green { color:#6ee7b7; }
 .red { color:#fca5a5; }
-.blue { color:#38bdf8; }
+.orange { color:#f97316; }
 .yellow { color:#fbbf24; }
 .purple { color:#a78bfa; }
 table { width:100%; border-collapse:collapse; background:#1e293b; border-radius:6px; overflow:hidden; font-size:11px; }
@@ -381,7 +381,7 @@ tr:hover { background:#1e3a5f; }
 .auto-refresh { font-size:10px; color:#64748b; margin-bottom:6px; }
 .tab-bar { display:flex; gap:4px; margin-bottom:10px; }
 .tab-btn { padding:6px 14px; border-radius:4px; border:none; background:#1e293b; color:#94a3b8; cursor:pointer; font-size:12px; }
-.tab-btn.active { background:#38bdf8; color:#0f172a; font-weight:600; }
+.tab-btn.active { background:#f97316; color:#fff; font-weight:600; }
 .tab-btn:hover { background:#334155; }
 @media(max-width:600px) {
   .grid { grid-template-columns:repeat(2,1fr); }
@@ -489,7 +489,7 @@ tr:hover { background:#1e3a5f; }
     <div style="grid-column:span 2"><label style="font-size:11px;color:#94a3b8">Take Profit 2</label><br><input id="mo_tp2" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
   </div>
   <div style="margin-top:12px;display:flex;gap:8px">
-    <button onclick="sendManualOrder(false)" style="flex:1;padding:8px;background:#38bdf8;color:#0f172a;border:none;border-radius:4px;font-weight:600;cursor:pointer">KIRIM ORDER</button>
+    <button onclick="sendManualOrder(false)" style="flex:1;padding:8px;background:#f97316;color:#fff;border:none;border-radius:4px;font-weight:600;cursor:pointer">KIRIM ORDER</button>
     <button onclick="sendManualOrder(true)" style="padding:8px;background:#334155;color:#94a3b8;border:none;border-radius:4px;cursor:pointer">Dry Run</button>
   </div>
   <div id="mo_result" style="margin-top:12px;font-size:12px;color:#6ee7b7"></div>
@@ -594,7 +594,7 @@ async function fetchData() {
 
     document.getElementById('stats').innerHTML = `
       <div class="card"><div class="lbl">Balance</div><div class="val green">$${(overview.balance||0).toFixed(2)}</div></div>
-      <div class="card"><div class="lbl">Equity</div><div class="val blue">$${(overview.equity||0).toFixed(2)}</div></div>
+      <div class="card"><div class="lbl">Equity</div><div class="val orange">$${(overview.equity||0).toFixed(2)}</div></div>
       <div class="card"><div class="lbl">Floating</div><div class="val ${(overview.floating_pl||0) >= 0 ? 'green' : 'red'}">${(overview.floating_pl||0) >= 0 ? '+' : ''}$${(overview.floating_pl||0).toFixed(2)}</div></div>
       <div class="card"><div class="lbl">Drawdown</div><div class="val yellow">${(overview.drawdown||0).toFixed(1)}%</div></div>
       <div class="card"><div class="lbl">Trades Today</div><div class="val">${overview.trades_today||0}</div></div>
@@ -619,7 +619,7 @@ async function fetchData() {
     const ssColor = (ss.score||0) >= 75 ? 'green' : (ss.score||0) >= 65 ? 'yellow' : 'red';
     document.getElementById('scalpingScoreBox').innerHTML = `
       <div class="card"><div class="lbl">Scalp Score</div><div class="val ${ssColor}">${ss.score||0}/100</div></div>
-      <div class="card"><div class="lbl">Grade</div><div class="val blue">${ss.grade||'-'}</div></div>
+      <div class="card"><div class="lbl">Grade</div><div class="val orange">${ss.grade||'-'}</div></div>
       <div class="card"><div class="lbl">Direction</div><div class="val" style="text-transform:uppercase">${ss.direction||'WAIT'}</div></div>
       <div class="card"><div class="lbl">Action</div><div class="val ${ss.action==='TRADE'?'green':'yellow'}">${ss.action||'WAIT'}</div></div>
     `;
@@ -651,7 +651,7 @@ async function fetchData() {
     if (equity.length > 0) {
       makeChart('equityChart', 'line', equity.map(e=>(e.time?.split(' ')[1]||'').slice(0,5)), [
         { label:'Balance', data:equity.map(e=>e.balance), borderColor:'#6ee7b7', borderWidth:2, fill:false, pointRadius:0, tension:0.3 },
-        { label:'Equity', data:equity.map(e=>e.equity), borderColor:'#38bdf8', borderWidth:2, fill:false, pointRadius:0, tension:0.3 }
+        { label:'Equity', data:equity.map(e=>e.equity), borderColor:'#f97316', borderWidth:2, fill:false, pointRadius:0, tension:0.3 }
       ], { scales:{ y:{ ticks:{ font:{size:9} } } } });
     } else {
       destroyChart('equityChart');
@@ -701,12 +701,12 @@ async function fetchAnalytics() {
     ], { plugins:{legend:{position:'bottom'}} });
 
     makeChart('signalDistChart', 'doughnut', ['Buy Signal','Sell Signal'], [
-      { data:[sd.buy, sd.sell], backgroundColor:['rgba(56,189,248,0.7)','rgba(167,139,250,0.7)'], borderColor:['#38bdf8','#a78bfa'], borderWidth:1 }
+      { data:[sd.buy, sd.sell], backgroundColor:['rgba(249,115,22,0.7)','rgba(167,139,250,0.7)'], borderColor:['#f97316','#a78bfa'], borderWidth:1 }
     ], { plugins:{legend:{position:'bottom'}} });
 
     const histLabels = Object.keys(ch);
     makeChart('confidenceHistChart', 'bar', histLabels, [
-      { label:'Count', data:histLabels.map(k=>ch[k]), backgroundColor:'rgba(56,189,248,0.7)', borderColor:'#38bdf8', borderWidth:1 }
+      { label:'Count', data:histLabels.map(k=>ch[k]), backgroundColor:'rgba(249,115,22,0.7)', borderColor:'#f97316', borderWidth:1 }
     ], { plugins:{legend:{display:false}} });
 
     const hours = hp.map(h=>h.hour);
@@ -726,7 +726,7 @@ async function fetchAnalytics() {
       <div class="card"><div class="lbl">TP / FP</div><div class="val green">${cm.tp||0}</div><div class="lbl red">${cm.fp||0}</div></div>
       <div class="card"><div class="lbl">FN / TN</div><div class="val red">${cm.fn||0}</div><div class="lbl green">${cm.tn||0}</div></div>
       <div class="card"><div class="lbl">Total Predictions</div><div class="val">${acc.total}</div></div>
-      <div class="card"><div class="lbl">Model</div><div class="val blue">${mv.current_version||'-'}</div><div class="lbl">${mv.training_date||'-'}</div></div>
+      <div class="card"><div class="lbl">Model</div><div class="val orange">${mv.current_version||'-'}</div><div class="lbl">${mv.training_date||'-'}</div></div>
       <div class="card"><div class="lbl">Dataset</div><div class="val">${mv.dataset_size}</div><div class="lbl">rows</div></div>
     `;
 

@@ -29,3 +29,4 @@ runtime/
 
 # macOS
 .DS_Store
+.vercel
