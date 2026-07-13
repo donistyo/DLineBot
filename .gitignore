@@ -30,3 +30,6 @@ runtime/
 # macOS
 .DS_Store
 .vercel
+
+# Generated data
+learning_data/

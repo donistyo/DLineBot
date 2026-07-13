@@ -27,13 +27,14 @@ class TradeScorer:
         bonuses = 0.0
 
         # =====================================
-        # 1. AI Confidence Score (0-100)
+        # 1. Scalp Confidence Score (0-100)
         # =====================================
-        if prediction:
-            conf = prediction.get("confidence", 0)
-            conf_score = min(100, conf * 100)
-            details["confidence"] = conf_score
-            total += conf_score * self.weights["confidence"]
+        scalp_conf = 0
+        if scalping and "scalp_score" in scalping:
+            scalp_conf = scalping["scalp_score"].get("score", 0)
+        conf_score = min(100, scalp_conf)
+        details["confidence"] = conf_score
+        total += conf_score * self.weights["confidence"]
 
         # =====================================
         # 2. Multi Timeframe Score (0-100)
@@ -203,6 +204,9 @@ class TradeScorer:
             details["scalping"] = scalp_score
             details["scalp_bonus"] = scalp_bonus
             bonuses += scalp_bonus
+        else:
+            details["scalping"] = 0
+            details["scalp_bonus"] = 0
 
         # =====================================
         # Final Score

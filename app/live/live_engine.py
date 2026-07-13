@@ -167,7 +167,7 @@ class LiveEngine:
                 min_atr_val = 0.5
 
         self.decision_engine = DecisionEngine(
-            confidence_threshold=confidence_th
+            min_scalp_score=30
         )
 
         self.risk_manager = RiskManager(
@@ -179,7 +179,10 @@ class LiveEngine:
         self.position_sizing = PositionSizingAI(
             risk_percent=risk_percent,
             atr_sl_multiplier=1.5 if mode == "scalp" else 2.0,
-            rr_ratio=rr_ratio
+            rr_ratio=rr_ratio,
+            max_spread_ratio=100,
+            min_confidence=0.10,
+            lot_step=0.01
         )
 
         self.auto_trader = AutoTrader(
@@ -360,7 +363,7 @@ class LiveEngine:
         print(f"DRY RUN : {dry_run}")
         print(f"BROKER : {BROKER.upper() if BROKER else 'DEFAULT'}")
         if mode == "scalp":
-            print(f"CONFIDENCE TH : {confidence_th}")
+            print(f"ENTRY : SCALP ENGINE")
             print(f"SL POINTS : {sl_points}")
             print(f"RR RATIO : {rr_ratio}")
             print(f"MAX SPREAD : {max_spread}")
@@ -422,10 +425,10 @@ class LiveEngine:
     # Decision
     # =====================================
 
-    def decide(self, prediction):
+    def decide(self, prediction, scalp_result=None, regime=None):
 
         return self.decision_engine.decide(
-            prediction
+            prediction, scalp_result, regime
         )
 
     # =====================================
@@ -450,7 +453,10 @@ class LiveEngine:
 
         balance = account.get("balance", 0)
 
-        market = market_last or {"close": current_price, "ATR": 0, "spread": 0}
+        if market_last is not None:
+            market = market_last
+        else:
+            market = {"close": current_price, "ATR": 0, "spread": 0}
 
         sizing = self.position_sizing.calculate(
             prediction=prediction,
@@ -642,7 +648,9 @@ class LiveEngine:
             # ===============================
 
             decision = self.decide(
-                prediction
+                prediction,
+                scalp_result,
+                regime
             )
 
             DecisionView.show(
@@ -792,8 +800,6 @@ class LiveEngine:
 
                 and position_result["allowed"]
 
-                and tf_confirmation["allowed"]
-
             )
 
             if can_trade:
@@ -847,26 +853,6 @@ class LiveEngine:
                     "status": "BLOCKED",
 
                     "reason": daily_result["reason"]
-
-                }
-
-            elif not tf_confirmation["allowed"]:
-
-                result = {
-
-                    "status": "BLOCKED",
-
-                    "reason": tf_confirmation["reason"]
-
-                }
-
-            elif trade_score and trade_score["action"] == "SKIP":
-
-                result = {
-
-                    "status": "BLOCKED",
-
-                    "reason": f"Trade Score {trade_score['grade']} ({trade_score['score']}/100)"
 
                 }
 
@@ -1009,9 +995,14 @@ class LiveEngine:
             atr_ok = self.trade_filter.volatility_filter.allow(last)["allowed"]
 
             lr_stats = self.trade_learner.get_learning_stats()
+            scalp_signal = "WAIT"
+            if scalp_result and "scalp_score" in scalp_result:
+                ss = scalp_result["scalp_score"]
+                scalp_signal = ss.get("direction", "NEUTRAL")
+
             dash_data = {
-                "signal": prediction["signal"],
-                "confidence": prediction["confidence"],
+                "signal": decision.get("action", "WAIT") if decision.get("action") != "NO_TRADE" else "WAIT",
+                "confidence": round(decision.get("confidence", 0) * 100, 1),
                 "trade": "YES" if decision["action"] != "NO_TRADE" else "NO",
                 "score": trade_score.get("grade", "-"),
                 "spread": "OK" if spread_ok else "NG",
@@ -1021,7 +1012,9 @@ class LiveEngine:
                 "daily_risk": "OK" if daily_result["allowed"] else "NG",
                 "drawdown": "OK" if drawdown_result["allowed"] else "NG",
                 "auto_trader": result.get("status", "READY"),
-                "learning": f"{lr_stats['total']} ({lr_stats['win_rate']}%)"
+                "learning": f"{lr_stats['total']} ({lr_stats['win_rate']}%)",
+                "reason": decision.get("reason", ""),
+                "scalp_grade": decision.get("grade", "-")
             }
 
             # ---- Write comprehensive dashboard data ----
@@ -1078,6 +1071,8 @@ class LiveEngine:
                 "confidence": dash_data["confidence"],
                 "trade": dash_data["trade"],
                 "score": dash_data["score"],
+                "reason": dash_data.get("reason", ""),
+                "scalp_grade": dash_data.get("scalp_grade", "-"),
                 "open_positions": open_positions,
                 "open_count": len(open_positions),
                 "trades_today": performance.get("total_trade", 0),

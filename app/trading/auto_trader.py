@@ -13,7 +13,7 @@ class AutoTrader:
 
         self.position_manager = PositionManager()
         self.order_builder = OrderBuilder()
-        self.order_sender = OrderSender()
+        self.order_sender = OrderSender(dry_run=dry_run)
 
     def execute(
         self,
@@ -65,21 +65,19 @@ class AutoTrader:
         # Build Order Request
         # ======================================
 
-        request = self.order_builder.build(
-
-            signal=decision["action"],
-
-            lot=risk["lot_size"],
-
-            entry=risk["entry_price"],
-
-            stop_loss=risk["stop_loss"],
-
-            take_profit=risk["take_profit"],
-
-            symbol=symbol
-
-        )
+        signal = decision["action"]
+        if signal == "BUY":
+            request = self.order_builder.buy(
+                symbol, risk["lot_size"], risk["entry_price"],
+                risk["stop_loss"], risk["take_profit"]
+            )
+        elif signal == "SELL":
+            request = self.order_builder.sell(
+                symbol, risk["lot_size"], risk["entry_price"],
+                risk["stop_loss"], risk["take_profit"]
+            )
+        else:
+            return {"status": "SKIPPED", "reason": f"Unknown signal: {signal}"}
 
         # ======================================
         # Dry Run

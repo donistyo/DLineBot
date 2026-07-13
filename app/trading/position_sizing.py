@@ -38,6 +38,8 @@ class PositionSizingAI:
         # 2. Stop Loss — ATR-based
         # =====================================
         sl_points = max(atr * self.atr_sl_multiplier, spread * 2)
+        if self.rr_ratio <= 2.0 and sl_points > 20:
+            sl_points = max(5, atr * self.atr_sl_multiplier)
         sl_points = round(sl_points, 1)
 
         if signal == "BUY":

@@ -1,29 +1,52 @@
 class DecisionEngine:
-    """
-    Mengubah hasil prediksi AI menjadi keputusan trading.
-    """
 
-    def __init__(
-        self,
-        confidence_threshold=0.70
-    ):
-        self.confidence_threshold = confidence_threshold
+    def __init__(self, min_scalp_score=40):
+        self.min_scalp_score = min_scalp_score
+        self.trend_map = {"UP": "BUY", "DOWN": "SELL", "SIDEWAYS": None}
 
-    def decide(self, prediction: dict) -> dict:
+    def decide(self, prediction=None, scalp_result=None, regime=None) -> dict:
+        if scalp_result is None or regime is None:
+            return {"action": "NO_TRADE", "reason": "Data tidak tersedia", "confidence": 0}
 
-        signal = prediction["signal"]
-        confidence = prediction["confidence"]
+        score_data = scalp_result.get("scalp_score", {})
+        score = score_data.get("score", 0)
+        direction = score_data.get("direction", "NEUTRAL")
+        grade = score_data.get("grade", "D")
 
-        if confidence < self.confidence_threshold:
-
+        if score < self.min_scalp_score:
             return {
                 "action": "NO_TRADE",
-                "reason": "Confidence terlalu rendah",
-                "confidence": confidence
+                "reason": f"Scalp score terlalu rendah ({score}/100, {grade})",
+                "confidence": score / 100,
+                "score": score,
+                "grade": grade
+            }
+
+        if direction in ("NEUTRAL", "WAIT"):
+            return {
+                "action": "NO_TRADE",
+                "reason": f"Scalp arah netral ({score}/100, {grade})",
+                "confidence": score / 100,
+                "score": score,
+                "grade": grade
+            }
+
+        trend = regime.get("trend", "SIDEWAYS") if regime else "SIDEWAYS"
+        expected_dir = self.trend_map.get(trend)
+
+        if expected_dir and direction != expected_dir:
+            return {
+                "action": "NO_TRADE",
+                "reason": f"Scalp arah {direction} bertentangan dengan trend {trend}",
+                "confidence": score / 100,
+                "score": score,
+                "grade": grade
             }
 
         return {
-            "action": signal,
-            "reason": "AI Confidence memenuhi syarat",
-            "confidence": confidence
+            "action": direction,
+            "reason": f"Scalp {grade} ({score}/100) searah trend {trend}",
+            "confidence": score / 100,
+            "score": score,
+            "grade": grade
         }
