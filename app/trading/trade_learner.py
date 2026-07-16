@@ -129,10 +129,15 @@ class TradeLearner:
             }
 
         df["label"] = df["outcome"].apply(self._outcome_to_label)
+        df = df[df["label"] != 1].copy()
+        df.loc[df["label"] == 2, "label"] = 1
         df = self.cleaner.clean(df)
 
         X = df[available]
         y = df["label"]
+
+        if y.nunique() < 2:
+            return {"status": "SKIP", "reason": f"Hanya {y.nunique()} kelas, perlu 2."}
 
         sample_weight = self._compute_sample_weights(df)
 

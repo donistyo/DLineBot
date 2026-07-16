@@ -2,8 +2,8 @@ class TradeScorer:
 
     def __init__(self):
         self.weights = {
-            "confidence": 0.25,
-            "multi_tf": 0.20,
+            "confidence": 0.35,
+            "multi_tf": 0.00,
             "regime": 0.15,
             "volatility": 0.10,
             "spread": 0.10,

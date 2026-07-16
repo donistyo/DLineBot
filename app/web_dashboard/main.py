@@ -757,8 +757,20 @@ async function fetchAnalytics() {
 async function fetchPartedOrders() {
   try {
     const data = await fetchJson('/api/order/parted?limit=20', []);
-    document.getElementById('partedOrders').innerHTML = data.map(t => '<tr><td style="font-size:10px">'+(t.time?.split(' ')[1]||t.time)+'</td><td>'+t.symbol+'</td><td><span class="badge '+(t.signal||'').toLowerCase()+'">'+t.signal+'</span></td><td>'+t.action+'</td><td>'+(t.entry_price||'-')+'</td><td>'+(t.stop_loss||'-')+'</td><td>'+(t.take_profit||'-')+'</td><td>'+t.lot_size+'</td><td>'+(t.status||'-')+'</td><td>'+(t.ticket||'-')+'</td></tr>').join('');
+    document.getElementById('partedOrders').innerHTML = data.map(t => '<tr style="cursor:pointer" onclick="fillManualOrder(\''+t.symbol+'\',\''+t.signal+'\','+(t.lot_size||0.01)+',\''+(t.entry_price||'')+'\',\''+(t.stop_loss||'')+'\',\''+(t.take_profit||'')+'\')"><td style="font-size:10px">'+(t.time?.split(' ')[1]||t.time)+'</td><td>'+t.symbol+'</td><td><span class="badge '+(t.signal||'').toLowerCase()+'">'+t.signal+'</span></td><td>'+t.action+'</td><td>'+(t.entry_price||'-')+'</td><td>'+(t.stop_loss||'-')+'</td><td>'+(t.take_profit||'-')+'</td><td>'+t.lot_size+'</td><td>'+(t.status||'-')+'</td><td>'+(t.ticket||'-')+'</td></tr>').join('');
   } catch(e) { console.error('Parted orders error:', e); }
+}
+
+function fillManualOrder(symbol, signal, volume, entry, sl, tp) {
+  document.getElementById('mo_symbol').value = symbol;
+  document.getElementById('mo_signal').value = signal;
+  document.getElementById('mo_volume').value = volume;
+  document.getElementById('mo_entry').value = entry;
+  document.getElementById('mo_sl').value = sl;
+  document.getElementById('mo_tp1').value = tp;
+  document.getElementById('mo_tp2').value = '';
+  document.getElementById('mo_result').textContent = 'Form diisi dari riwayat';
+  window.scrollTo(0, document.getElementById('tab-manual').offsetTop - 10);
 }
 
 function sendManualOrder(dryRun) {

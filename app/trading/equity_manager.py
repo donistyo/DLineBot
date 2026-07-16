@@ -20,8 +20,12 @@ class EquityManager:
             print("MT5 Error :", mt5.last_error())
             return None
 
-        balance = account.balance
-        equity = account.equity
+        if isinstance(account, dict):
+            balance = account.get("balance", 0)
+            equity = account.get("equity", 0)
+        else:
+            balance = account.balance
+            equity = account.equity
         floating_pl = equity - balance
 
         if equity > self.peak_equity:
@@ -51,5 +55,5 @@ class EquityManager:
             "max_drawdown": self.max_drawdown,
             "peak_equity": self.peak_equity,
             "status": status,
-            "currency": account.currency
+            "currency": account.get("currency", "USD") if isinstance(account, dict) else account.currency
         }

@@ -966,7 +966,11 @@ class LiveEngine:
                 print("=" * 60)
                 print(f"Trade tracked : {total_samples} samples")
 
-            retrain_result = self.trade_learner.retrain()
+            try:
+                retrain_result = self.trade_learner.retrain()
+            except Exception as e:
+                print(f"[RETRAIN ERROR] {e}")
+                retrain_result = {"status": "SKIP", "reason": str(e)}
             if retrain_result["status"] == "RETRAINED":
                 print()
                 print("=" * 60)

@@ -25,7 +25,7 @@ class LearningManager:
         record["confidence"] = confidence
         record["ticket"] = ticket
         record["entry_time"] = entry_time.isoformat()
-        record["outcome"] = 0
+        record["outcome"] = 0.0
         record["saved_at"] = entry_time.isoformat()
         df_new = pd.DataFrame([record])
         if path.exists():
@@ -62,13 +62,25 @@ class LearningManager:
 
     def _update_db_profit(self, deal):
         try:
+            entry_ticket = self._find_entry_ticket(deal)
+            if entry_ticket is None:
+                return
             with db_session() as db:
-                trade = db.query(TradeLog).filter_by(ticket=deal.ticket).first()
+                trade = db.query(TradeLog).filter_by(ticket=entry_ticket).first()
                 if trade:
                     trade.profit = deal.profit
                     db.commit()
         except Exception:
             pass
+
+    def _find_entry_ticket(self, exit_deal):
+        try:
+            position_id = getattr(exit_deal, "position_id", None)
+            if position_id is None:
+                return None
+            return position_id
+        except Exception:
+            return None
 
     def _process_closed(self, deal):
         path = self.learning_dir / "trade_features.csv"
@@ -76,6 +88,8 @@ class LearningManager:
             return False
 
         df = pd.read_csv(path)
+        if "outcome" in df.columns and df["outcome"].dtype.kind in ("i", "u"):
+            df["outcome"] = df["outcome"].astype(float)
         close_time = datetime.now()
         ticket_col = "ticket"
         matched = None

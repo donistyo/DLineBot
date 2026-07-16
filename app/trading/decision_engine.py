@@ -1,6 +1,6 @@
 class DecisionEngine:
 
-    def __init__(self, min_scalp_score=40):
+    def __init__(self, min_scalp_score=25):
         self.min_scalp_score = min_scalp_score
         self.trend_map = {"UP": "BUY", "DOWN": "SELL", "SIDEWAYS": None}
 
@@ -36,11 +36,12 @@ class DecisionEngine:
 
         if expected_dir and direction != expected_dir:
             return {
-                "action": "NO_TRADE",
-                "reason": f"Scalp arah {direction} bertentangan dengan trend {trend}",
+                "action": direction,
+                "reason": f"MANUAL: Scalp {direction} vs trend {trend} (score {score}/100 {grade})",
                 "confidence": score / 100,
                 "score": score,
-                "grade": grade
+                "grade": grade,
+                "manual": True
             }
 
         return {

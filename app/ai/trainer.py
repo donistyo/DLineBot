@@ -9,9 +9,7 @@ class XGBoostTrainer:
 
         self.model = XGBClassifier(
 
-            objective="multi:softmax",
-
-            num_class=3,
+            objective="binary:logistic",
 
             n_estimators=200,
 
