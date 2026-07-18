@@ -295,28 +295,39 @@ def api_dry_run(data: dict):
 
 
 @app.get("/api/order/parted")
-def api_get_parted_orders(limit=20):
+def api_get_parted_orders(limit: int = 20):
     with db_session() as db:
-        trades = (
+        tp_trades = (
             db.query(TradeLog)
             .filter(TradeLog.action.like("%TP%"))
             .order_by(TradeLog.id.desc())
             .limit(limit)
             .all()
         )
+        if len(tp_trades) < limit:
+            recent = (
+                db.query(TradeLog)
+                .filter(~TradeLog.action.like("%TP%"))
+                .order_by(TradeLog.id.desc())
+                .limit(limit - len(tp_trades))
+                .all()
+            )
+            trades = tp_trades + recent
+        else:
+            trades = tp_trades
     return [
         {
             "id": t.id,
             "time": str(t.time),
-            "symbol": t.symbol,
-            "signal": t.signal,
+            "symbol": t.symbol or "XAUUSDc",
+            "signal": t.signal or "BUY",
             "action": t.action,
-            "entry_price": t.entry_price,
-            "stop_loss": t.stop_loss,
-            "take_profit": t.take_profit,
-            "lot_size": t.lot_size,
-            "status": t.status,
-            "ticket": t.ticket,
+            "entry_price": t.entry_price or "",
+            "stop_loss": t.stop_loss or "",
+            "take_profit": t.take_profit or "",
+            "lot_size": t.lot_size or 0.01,
+            "status": t.status or "",
+            "ticket": t.ticket or "",
         }
         for t in trades
     ]
@@ -757,21 +768,46 @@ async function fetchAnalytics() {
 async function fetchPartedOrders() {
   try {
     const data = await fetchJson('/api/order/parted?limit=20', []);
-    document.getElementById('partedOrders').innerHTML = data.map(t => '<tr style="cursor:pointer" onclick="fillManualOrder(\''+t.symbol+'\',\''+t.signal+'\','+(t.lot_size||0.01)+',\''+(t.entry_price||'')+'\',\''+(t.stop_loss||'')+'\',\''+(t.take_profit||'')+'\')"><td style="font-size:10px">'+(t.time?.split(' ')[1]||t.time)+'</td><td>'+t.symbol+'</td><td><span class="badge '+(t.signal||'').toLowerCase()+'">'+t.signal+'</span></td><td>'+t.action+'</td><td>'+(t.entry_price||'-')+'</td><td>'+(t.stop_loss||'-')+'</td><td>'+(t.take_profit||'-')+'</td><td>'+t.lot_size+'</td><td>'+(t.status||'-')+'</td><td>'+(t.ticket||'-')+'</td></tr>').join('');
+    document.getElementById('partedOrders').innerHTML = data.map(t => {
+      const sym = (t.symbol||'XAUUSDc').replace(/'/g,'');
+      const sig = (t.signal||'').replace(/'/g,'');
+      const vol = t.lot_size||0.01;
+      const entry = t.entry_price||'';
+      const sl = t.stop_loss||'';
+      const tp = t.take_profit||'';
+      return '<tr style="cursor:pointer" data-sym="'+sym+'" data-sig="'+sig+'" data-vol="'+vol+'" data-entry="'+entry+'" data-sl="'+sl+'" data-tp="'+tp+'"><td style="font-size:10px">'+(t.time?.split(' ')[1]||t.time)+'</td><td>'+sym+'</td><td><span class="badge '+sig.toLowerCase()+'">'+sig+'</span></td><td>'+(t.action||'-')+'</td><td>'+entry+'</td><td>'+sl+'</td><td>'+tp+'</td><td>'+vol+'</td><td>'+(t.status||'-')+'</td><td>'+(t.ticket||'-')+'</td></tr>';
+    }).join('');
   } catch(e) { console.error('Parted orders error:', e); }
 }
 
-function fillManualOrder(symbol, signal, volume, entry, sl, tp) {
-  document.getElementById('mo_symbol').value = symbol;
-  document.getElementById('mo_signal').value = signal;
-  document.getElementById('mo_volume').value = volume;
+document.getElementById('partedOrders').addEventListener('click', function(e) {
+  const tr = e.target.closest('tr');
+  if (!tr) return;
+  const sym = tr.dataset.sym || 'XAUUSDc';
+  const sig = tr.dataset.sig || 'BUY';
+  const vol = '0.01';
+  const entry = tr.dataset.entry || '';
+  const entryVal = parseFloat(entry);
+  let sl = '', tp1 = '';
+  if (!isNaN(entryVal) && entryVal > 0) {
+    if (sig === 'BUY') {
+      sl = (entryVal - 6).toFixed(1);
+      tp1 = (entryVal + 2).toFixed(1);
+    } else {
+      sl = (entryVal + 6).toFixed(1);
+      tp1 = (entryVal - 2).toFixed(1);
+    }
+  }
+  document.getElementById('mo_symbol').value = sym;
+  document.getElementById('mo_signal').value = sig;
+  document.getElementById('mo_volume').value = vol;
   document.getElementById('mo_entry').value = entry;
   document.getElementById('mo_sl').value = sl;
-  document.getElementById('mo_tp1').value = tp;
+  document.getElementById('mo_tp1').value = tp1;
   document.getElementById('mo_tp2').value = '';
-  document.getElementById('mo_result').textContent = 'Form diisi dari riwayat';
+  document.getElementById('mo_result').textContent = 'SL 6pt / TP target 1.0-2.0 (otomatis)';
   window.scrollTo(0, document.getElementById('tab-manual').offsetTop - 10);
-}
+});
 
 function sendManualOrder(dryRun) {
   const btn = event.target;
