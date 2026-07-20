@@ -86,6 +86,7 @@ from app.live.multi_tf_view import MultiTFView
 from app.live.score_view import ScoreView
 from app.trading.learning_manager import LearningManager
 from app.trading.fundamental_trader import FundamentalTrader
+from app.trading.grid_manager import GridManager
 
 
 class LiveEngine:
@@ -96,7 +97,10 @@ class LiveEngine:
         timeframe="M1",
         bars=2000,
         dry_run=True,
-        mode="scalp"
+        mode="scalp",
+        grid_mode=False,
+        grid_layers=3,
+        grid_atr_multiplier=0.5,
     ):
 
         # =====================================
@@ -347,6 +351,18 @@ class LiveEngine:
             cooldown_minutes=60
         )
 
+        self.grid_mode = grid_mode
+        grid_lot = 0.01 if mode == "scalp" else 0.02
+        self.grid_manager = GridManager(
+            symbol=symbol,
+            dry_run=dry_run,
+            grid_layers=grid_layers,
+            grid_atr_multiplier=grid_atr_multiplier,
+            lot_size=grid_lot,
+            magic=10002,
+        )
+        self.grid_placed = False
+
         self.last_candle_time = None
         self.last_signal_time = None
         self.last_fundamental_trade_time = None
@@ -361,6 +377,7 @@ class LiveEngine:
         print(f"TIMEFRAME : {timeframe}")
         print(f"BARS : {bars}")
         print(f"DRY RUN : {dry_run}")
+        print(f"GRID MODE : {'ON' if grid_mode else 'OFF'}")
         print(f"BROKER : {BROKER.upper() if BROKER else 'DEFAULT'}")
         if mode == "scalp":
             print(f"ENTRY : SCALP ENGINE")
@@ -509,6 +526,35 @@ class LiveEngine:
                 return None
 
             self.last_candle_time = current_candle
+
+            # ===============================
+            # Grid Management
+            # ===============================
+
+            if self.grid_mode and not self.grid_placed:
+                atr = last.get("ATR", 1.0)
+                grid_result = self.grid_manager.place_grid(
+                    current_price=last["close"],
+                    atr=atr
+                )
+                self.grid_placed = True
+                print()
+                print("=" * 60)
+                print("GRID PLACED")
+                print("=" * 60)
+                for r in grid_result:
+                    status = "OK" if r["result"].get("success") or r["result"].get("dry_run") else "FAIL"
+                    print(f"  Layer {r['layer']} {r['side']} @ {r['stop_price']} [{status}]")
+
+            elif self.grid_mode and self.grid_placed:
+                grid_status = self.grid_manager.manage()
+                if grid_status["triggered"] > 0:
+                    print()
+                    print("=" * 60)
+                    print("GRID TRIGGERED")
+                    print("=" * 60)
+                    print(f"Triggered: {grid_status['triggered']} layer(s)")
+                    print(f"Active    : {grid_status['active']} pending order(s)")
 
             # ===============================
             # Account
@@ -767,6 +813,20 @@ class LiveEngine:
                     EmergencyExitView.show(emergency_result)
 
             else:
+
+                if self.grid_mode and self.grid_placed:
+                    gs = self.grid_manager.get_status()
+                    if gs["active_count"] > 0 or gs["triggered_count"] > 0:
+                        print()
+                        print("=" * 60)
+                        print("GRID STATUS")
+                        print("=" * 60)
+                        print(f"Active Pending   : {gs['active_count']}")
+                        print(f"Triggered Layers : {gs['triggered_count']}")
+                        for tl in gs["triggered_levels"]:
+                            print(f"  Layer {tl['layer']} {tl['side']} @ {tl['stop_price']} [FILLED]")
+                        for ap in gs["active_pending"]:
+                            print(f"  {ap['type']} {ap['volume']} @ {ap['price']} [ACTIVE]")
 
                 re = self.smart_position.check_re_entry(
                     prediction, regime, last
