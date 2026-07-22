@@ -262,6 +262,8 @@ class LiveEngine:
             levels=sp_levels
         )
 
+        self._auto_trade_enabled = True
+
         self.daily_risk = DailyRiskManager(
             max_trade=daily_max_trade,
             max_daily_loss=daily_max_loss,
@@ -847,9 +849,17 @@ class LiveEngine:
 
             risk = None
 
+            try:
+                with open("runtime/auto_trade_enabled.json") as f:
+                    self._auto_trade_enabled = json.load(f).get("enabled", True)
+            except:
+                pass
+
             can_trade = (
 
-                decision["action"] != "NO_TRADE"
+                self._auto_trade_enabled
+
+                and decision["action"] != "NO_TRADE"
 
                 and filter_result["allowed"]
 
@@ -903,7 +913,17 @@ class LiveEngine:
             # Auto Trader
             # ===============================
 
-            if not filter_result["allowed"]:
+            if not self._auto_trade_enabled:
+
+                result = {
+
+                    "status": "BLOCKED",
+
+                    "reason": "Auto-trade dimatikan dari dashboard."
+
+                }
+
+            elif not filter_result["allowed"]:
 
                 result = {
 

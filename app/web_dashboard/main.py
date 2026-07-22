@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, date
 from pathlib import Path
@@ -186,7 +186,7 @@ def _start_learning_loop():
     t.start()
 
 
-app = FastAPI(title="DLineBot Dashboard")
+app = FastAPI(title="DLine")
 
 
 @app.on_event("startup")
@@ -541,6 +541,82 @@ def api_grid_status():
 
 
 # =====================================
+# Auto-Trade Monitor API
+# =====================================
+
+@app.get("/api/auto-trade/monitor")
+def api_auto_trade_monitor():
+    account = get_cached_account()
+    positions = get_cached_positions("XAUUSDc")
+    pending = get_cached_pending("XAUUSDc")
+    scalp_raw = {"score": 0, "grade": "-", "direction": "NEUTRAL", "action": "WAIT"}
+    try:
+        with open("runtime/scalping.json") as f:
+            s = json.load(f)
+            if "scalp_score" in s:
+                scalp_raw = s["scalp_score"]
+    except:
+        pass
+
+    pos_out = []
+    for p in positions:
+        be = p.get("sl", 0) and abs(p["sl"] - p["open_price"]) < 0.02
+        ts = p.get("sl", 0) and (
+            (p["type"] == "BUY" and p["sl"] > p["open_price"] + 0.01) or
+            (p["type"] == "SELL" and p["sl"] < p["open_price"] - 0.01)
+        )
+        pos_out.append({
+            "ticket": p["ticket"], "type": p["type"], "volume": p["volume"],
+            "open_price": p["open_price"], "current": p["current_price"],
+            "profit": p["profit"], "sl": p["sl"], "tp": p["tp"],
+            "be": be, "ts": ts
+        })
+
+    return {
+        "account": {"balance": account.get("balance", 0), "equity": account.get("equity", 0)},
+        "scalp": scalp_raw,
+        "positions": pos_out,
+        "pending_orders": pending,
+        "last_update": time.strftime("%H:%M:%S"),
+        "auto_trade_enabled": _AUTO_TRADE_ENABLED,
+    }
+
+
+# =====================================
+# Auto-Trade Toggle API
+# =====================================
+
+_AUTO_TRADE_ENABLED = True
+
+@app.get("/api/auto-trade/enabled")
+def api_auto_trade_get_enabled():
+    global _AUTO_TRADE_ENABLED
+    try:
+        with open("runtime/auto_trade_enabled.json") as f:
+            _AUTO_TRADE_ENABLED = json.load(f).get("enabled", True)
+    except:
+        pass
+    return {"enabled": _AUTO_TRADE_ENABLED}
+
+@app.get("/api/auto-trade/do-enable")
+def api_auto_trade_enable():
+    global _AUTO_TRADE_ENABLED
+    _AUTO_TRADE_ENABLED = True
+    Path("runtime").mkdir(exist_ok=True)
+    with open("runtime/auto_trade_enabled.json", "w") as f:
+        json.dump({"enabled": True}, f)
+    return {"status": "ok", "enabled": True}
+
+@app.get("/api/auto-trade/do-disable")
+def api_auto_trade_disable():
+    global _AUTO_TRADE_ENABLED
+    _AUTO_TRADE_ENABLED = False
+    Path("runtime").mkdir(exist_ok=True)
+    with open("runtime/auto_trade_enabled.json", "w") as f:
+        json.dump({"enabled": False}, f)
+    return {"status": "ok", "enabled": False}
+
+# =====================================
 # Position Management API
 # =====================================
 
@@ -623,6 +699,20 @@ def api_analytics_summary():
     }
 
 
+@app.get("/logo")
+def serve_logo():
+    logo_path = Path("DIMAS (1).png")
+    if logo_path.exists():
+        return FileResponse(str(logo_path), media_type="image/png")
+    return HTMLResponse(status_code=404)
+
+@app.get("/favicon")
+def serve_favicon():
+    icon_path = Path("logo-tab.png")
+    if icon_path.exists():
+        return FileResponse(str(icon_path), media_type="image/png")
+    return HTMLResponse(status_code=404)
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     return HTMLResponse(HTML_PAGE)
@@ -633,14 +723,15 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>DLineBot AI - Quant Dashboard</title>
+<title>DLine</title>
+<link rel="icon" href="/favicon" type="image/png">
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 body { font-family:'Segoe UI',sans-serif; background:#0f172a; color:#e2e8f0; padding:12px; }
-h1 { font-size:20px; margin-bottom:12px; color:#f97316; display:flex; align-items:center; gap:10px; }
+h1 { font-size:20px; margin-bottom:12px; color:#3b82f6; display:flex; align-items:center; gap:10px; }
 h1 small { font-size:13px; color:#64748b; font-weight:400; }
-h2 { font-size:14px; margin:16px 0 6px; color:#94a3b8; border-left:3px solid #f97316; padding-left:8px; }
+h2 { font-size:14px; margin:16px 0 6px; color:#94a3b8; border-left:3px solid #3b82f6; padding-left:8px; }
 .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(130px,1fr)); gap:6px; margin-bottom:8px; }
 .card { background:#1e293b; padding:8px 10px; border-radius:6px; }
 .card .lbl { font-size:10px; color:#64748b; text-transform:uppercase; }
@@ -650,7 +741,7 @@ h2 { font-size:14px; margin:16px 0 6px; color:#94a3b8; border-left:3px solid #f9
 .chart-container { background:#1e293b; border-radius:6px; padding:8px; }
 .green { color:#6ee7b7; }
 .red { color:#fca5a5; }
-.orange { color:#f97316; }
+.blue { color:#3b82f6; }
 .yellow { color:#fbbf24; }
 .purple { color:#a78bfa; }
 table { width:100%; border-collapse:collapse; background:#1e293b; border-radius:6px; overflow:hidden; font-size:11px; }
@@ -670,7 +761,7 @@ tr:hover { background:#1e3a5f; }
 .auto-refresh { font-size:10px; color:#64748b; margin-bottom:6px; }
 .tab-bar { display:flex; gap:4px; margin-bottom:10px; }
 .tab-btn { padding:6px 14px; border-radius:4px; border:none; background:#1e293b; color:#94a3b8; cursor:pointer; font-size:12px; }
-.tab-btn.active { background:#f97316; color:#fff; font-weight:600; }
+.tab-btn.active { background:#3b82f6; color:#fff; font-weight:600; }
 .tab-btn:hover { background:#334155; }
 @media(max-width:600px) {
   .grid { grid-template-columns:repeat(2,1fr); }
@@ -685,7 +776,7 @@ tr:hover { background:#1e3a5f; }
 <body>
 
 <h1>
-  DLineBot AI
+  <img src="/logo" style="height:64px;margin-right:10px;border-radius:4px" alt="logo">
   <small id="serverTime"></small>
   <span style="margin-left:auto;font-size:11px;color:#64748b" id="refreshStatus">Auto 5s</span>
 </h1>
@@ -779,7 +870,7 @@ tr:hover { background:#1e3a5f; }
     <div style="grid-column:span 2"><label style="font-size:11px;color:#94a3b8">Take Profit 2</label><br><input id="mo_tp2" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
   </div>
   <div style="margin-top:12px;display:flex;gap:8px">
-    <button onclick="sendManualOrder(false)" style="flex:1;padding:8px;background:#f97316;color:#fff;border:none;border-radius:4px;font-weight:600;cursor:pointer">KIRIM ORDER</button>
+    <button onclick="sendManualOrder(false)" style="flex:1;padding:8px;background:#3b82f6;color:#fff;border:none;border-radius:4px;font-weight:600;cursor:pointer">KIRIM ORDER</button>
     <button onclick="sendManualOrder(true)" style="padding:8px;background:#334155;color:#94a3b8;border:none;border-radius:4px;cursor:pointer">Dry Run</button>
   </div>
   <div id="mo_result" style="margin-top:12px;font-size:12px;color:#6ee7b7"></div>
@@ -794,6 +885,9 @@ tr:hover { background:#1e3a5f; }
 
 <div id="tab-grid" style="display:none">
 
+<div style="display:flex;gap:16px;flex-wrap:wrap">
+
+<div style="flex:1;min-width:320px">
 <h2>Grid Order (Buy Stop / Sell Stop)</h2>
 <div style="background:#1e293b;border-radius:6px;padding:16px;max-width:500px">
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -805,11 +899,38 @@ tr:hover { background:#1e3a5f; }
     <div><label style="font-size:11px;color:#94a3b8">TP Distance (pt)</label><br><input id="gr_tp" value="8.0" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
   </div>
   <div style="margin-top:12px;display:flex;gap:8px">
-    <button onclick="placeGrid(false)" style="flex:1;padding:8px;background:#f97316;color:#fff;border:none;border-radius:4px;font-weight:600;cursor:pointer">PLACE GRID</button>
+    <button onclick="placeGrid(false)" style="flex:1;padding:8px;background:#3b82f6;color:#fff;border:none;border-radius:4px;font-weight:600;cursor:pointer">PLACE GRID</button>
     <button onclick="placeGrid(true)" style="padding:8px;background:#334155;color:#94a3b8;border:none;border-radius:4px;cursor:pointer">Dry Run</button>
     <button onclick="cancelGrid()" style="padding:8px;background:#dc2626;color:#fff;border:none;border-radius:4px;cursor:pointer">Cancel All</button>
   </div>
   <div id="gr_result" style="margin-top:12px;font-size:12px;color:#6ee7b7"></div>
+</div>
+</div>
+
+<div style="flex:1;min-width:320px">
+<h2>Auto-Trade Monitor</h2>
+<div id="atmPanel" style="background:#1e293b;border-radius:6px;padding:16px;font-size:12px">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div><span style="color:#94a3b8">Balance</span><br><span id="atm_balance" style="font-size:20px;font-weight:700;color:#e2e8f0">-</span></div>
+    <div><span style="color:#94a3b8">Equity</span><br><span id="atm_equity" style="font-size:20px;font-weight:700;color:#e2e8f0">-</span></div>
+    <div><span style="color:#94a3b8">Scalp Score</span><br><span id="atm_score" style="font-size:16px;font-weight:600">-</span></div>
+    <div><span style="color:#94a3b8">Grade</span><br><span id="atm_grade" style="font-size:16px;font-weight:600">-</span></div>
+    <div><span style="color:#94a3b8">Direction</span><br><span id="atm_dir" style="font-size:16px;font-weight:600">-</span></div>
+    <div><span style="color:#94a3b8">Action</span><br><span id="atm_action" style="font-size:16px;font-weight:600">-</span></div>
+  </div>
+  <hr style="border-color:#334155;margin:12px 0">
+  <div style="color:#94a3b8;margin-bottom:6px">Positions <span id="atm_pos_count" style="color:#e2e8f0">0</span></div>
+  <div id="atm_positions" style="max-height:200px;overflow-y:auto"></div>
+  <hr style="border-color:#334155;margin:12px 0">
+  <div style="color:#94a3b8;margin-bottom:6px">Pending Orders <span id="atm_pend_count" style="color:#e2e8f0">0</span></div>
+  <div id="atm_pending" style="max-height:120px;overflow-y:auto;font-size:11px;color:#64748b"></div>
+    <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+      <button id="atm_toggle_btn" onclick="toggleAutoTrade()" style="flex:1;padding:6px;border:none;border-radius:4px;font-weight:600;cursor:pointer;font-size:11px">...</button>
+      <span style="color:#475569;font-size:10px">Updated: <span id="atm_updated">-</span></span>
+    </div>
+</div>
+</div>
+
 </div>
 
 <h2>Pending Orders</h2>
@@ -864,6 +985,8 @@ function switchTab(name, el) {
   if (name === 'grid') {
     fetchGridStatus();
     fetchManagePositions();
+    fetchAutoTradeMonitor();
+    loadAutoTradeEnabled();
   }
   if (name === 'learning' && !learningLoaded) {
     learningLoaded = true;
@@ -920,7 +1043,7 @@ async function fetchData() {
 
     document.getElementById('stats').innerHTML = `
       <div class="card"><div class="lbl">Balance</div><div class="val green">$${(overview.balance||0).toFixed(2)}</div></div>
-      <div class="card"><div class="lbl">Equity</div><div class="val orange">$${(overview.equity||0).toFixed(2)}</div></div>
+      <div class="card"><div class="lbl">Equity</div><div class="val blue">$${(overview.equity||0).toFixed(2)}</div></div>
       <div class="card"><div class="lbl">Floating</div><div class="val ${(overview.floating_pl||0) >= 0 ? 'green' : 'red'}">${(overview.floating_pl||0) >= 0 ? '+' : ''}$${(overview.floating_pl||0).toFixed(2)}</div></div>
       <div class="card"><div class="lbl">Drawdown</div><div class="val yellow">${(overview.drawdown||0).toFixed(1)}%</div></div>
       <div class="card"><div class="lbl">Trades Today</div><div class="val">${overview.trades_today||0}</div></div>
@@ -945,7 +1068,7 @@ async function fetchData() {
     const ssColor = (ss.score||0) >= 75 ? 'green' : (ss.score||0) >= 65 ? 'yellow' : 'red';
     document.getElementById('scalpingScoreBox').innerHTML = `
       <div class="card"><div class="lbl">Scalp Score</div><div class="val ${ssColor}">${ss.score||0}/100</div></div>
-      <div class="card"><div class="lbl">Grade</div><div class="val orange">${ss.grade||'-'}</div></div>
+      <div class="card"><div class="lbl">Grade</div><div class="val blue">${ss.grade||'-'}</div></div>
       <div class="card"><div class="lbl">Direction</div><div class="val" style="text-transform:uppercase">${ss.direction||'WAIT'}</div></div>
       <div class="card"><div class="lbl">Action</div><div class="val ${ss.action==='TRADE'?'green':'yellow'}">${ss.action||'WAIT'}</div></div>
     `;
@@ -977,7 +1100,7 @@ async function fetchData() {
     if (equity.length > 0) {
       makeChart('equityChart', 'line', equity.map(e=>(e.time?.split(' ')[1]||'').slice(0,5)), [
         { label:'Balance', data:equity.map(e=>e.balance), borderColor:'#6ee7b7', borderWidth:2, fill:false, pointRadius:0, tension:0.3 },
-        { label:'Equity', data:equity.map(e=>e.equity), borderColor:'#f97316', borderWidth:2, fill:false, pointRadius:0, tension:0.3 }
+        { label:'Equity', data:equity.map(e=>e.equity), borderColor:'#3b82f6', borderWidth:2, fill:false, pointRadius:0, tension:0.3 }
       ], { scales:{ y:{ ticks:{ font:{size:9} } } } });
     } else {
       destroyChart('equityChart');
@@ -1027,12 +1150,12 @@ async function fetchAnalytics() {
     ], { plugins:{legend:{position:'bottom'}} });
 
     makeChart('signalDistChart', 'doughnut', ['Buy Signal','Sell Signal'], [
-      { data:[sd.buy, sd.sell], backgroundColor:['rgba(249,115,22,0.7)','rgba(167,139,250,0.7)'], borderColor:['#f97316','#a78bfa'], borderWidth:1 }
+      { data:[sd.buy, sd.sell], backgroundColor:['rgba(59,130,246,0.7)','rgba(167,139,250,0.7)'], borderColor:['#3b82f6','#a78bfa'], borderWidth:1 }
     ], { plugins:{legend:{position:'bottom'}} });
 
     const histLabels = Object.keys(ch);
     makeChart('confidenceHistChart', 'bar', histLabels, [
-      { label:'Count', data:histLabels.map(k=>ch[k]), backgroundColor:'rgba(249,115,22,0.7)', borderColor:'#f97316', borderWidth:1 }
+      { label:'Count', data:histLabels.map(k=>ch[k]), backgroundColor:'rgba(59,130,246,0.7)', borderColor:'#3b82f6', borderWidth:1 }
     ], { plugins:{legend:{display:false}} });
 
     const hours = hp.map(h=>h.hour);
@@ -1052,7 +1175,7 @@ async function fetchAnalytics() {
       <div class="card"><div class="lbl">TP / FP</div><div class="val green">${cm.tp||0}</div><div class="lbl red">${cm.fp||0}</div></div>
       <div class="card"><div class="lbl">FN / TN</div><div class="val red">${cm.fn||0}</div><div class="lbl green">${cm.tn||0}</div></div>
       <div class="card"><div class="lbl">Total Predictions</div><div class="val">${acc.total}</div></div>
-      <div class="card"><div class="lbl">Model</div><div class="val orange">${mv.current_version||'-'}</div><div class="lbl">${mv.training_date||'-'}</div></div>
+      <div class="card"><div class="lbl">Model</div><div class="val blue">${mv.current_version||'-'}</div><div class="lbl">${mv.training_date||'-'}</div></div>
       <div class="card"><div class="lbl">Dataset</div><div class="val">${mv.dataset_size}</div><div class="lbl">rows</div></div>
     `;
 
@@ -1123,6 +1246,80 @@ document.getElementById('partedOrders').addEventListener('click', function(e) {
   document.getElementById('mo_result').textContent = 'SL 6pt / TP target 1.0-2.0 (otomatis)';
   window.scrollTo(0, document.getElementById('tab-manual').offsetTop - 10);
 });
+
+// =====================================
+// =====================================
+// Auto-Trade Monitor
+// =====================================
+
+function showNotif(msg, color) {
+  const el = document.createElement('div');
+  el.textContent = msg;
+  el.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);padding:10px 24px;border-radius:6px;color:#fff;font-weight:600;font-size:13px;z-index:9999;background:'+color+';box-shadow:0 4px 12px rgba(0,0,0,0.4);transition:opacity 0.3s';
+  document.body.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 2000);
+}
+
+async function toggleAutoTrade() {
+  const btn = document.getElementById('atm_toggle_btn');
+  const wasEnabled = btn.dataset.enabled === 'true';
+  const url = wasEnabled ? '/api/auto-trade/do-disable' : '/api/auto-trade/do-enable';
+  try {
+    const r = await fetchJson(url, {enabled:!wasEnabled});
+    if (r.status === 'ok') {
+      btn.dataset.enabled = r.enabled ? 'true' : 'false';
+      btn.textContent = r.enabled ? 'STOP AUTO-TRADE' : 'START AUTO-TRADE';
+      btn.style.background = r.enabled ? '#dc2626' : '#22c55e';
+      btn.style.color = '#fff';
+      showNotif(r.enabled ? 'AUTO-TRADE DIMULAI' : 'AUTO-TRADE DIHENTIKAN', r.enabled ? '#22c55e' : '#dc2626');
+    }
+  } catch(e) { console.error('Toggle error:', e); }
+}
+
+async function loadAutoTradeEnabled() {
+  try {
+    const r = await fetchJson('/api/auto-trade/enabled', {enabled:true});
+    const btn = document.getElementById('atm_toggle_btn');
+    btn.dataset.enabled = r.enabled ? 'true' : 'false';
+    btn.textContent = r.enabled ? 'STOP AUTO-TRADE' : 'START AUTO-TRADE';
+    btn.style.background = r.enabled ? '#dc2626' : '#22c55e';
+    btn.style.color = '#fff';
+  } catch(e) { console.error('Load enabled error:', e); }
+}
+
+async function fetchAutoTradeMonitor() {
+  try {
+    const d = await fetchJson('/api/auto-trade/monitor', {account:{},scalp:{},positions:[],pending_orders:[]});
+    document.getElementById('atm_balance').textContent = d.account?.balance != null ? d.account.balance.toFixed(2) : '-';
+    document.getElementById('atm_equity').textContent = d.account?.equity != null ? d.account.equity.toFixed(2) : '-';
+    const ss = d.scalp || {};
+    const sc = ss.score || 0;
+    document.getElementById('atm_score').textContent = sc;
+    document.getElementById('atm_score').style.color = sc >= 65 ? '#6ee7b7' : sc >= 50 ? '#facc15' : '#f87171';
+    document.getElementById('atm_grade').textContent = ss.grade || '-';
+    document.getElementById('atm_dir').textContent = ss.direction || '-';
+    const act = ss.action || 'WAIT';
+    const actEl = document.getElementById('atm_action');
+    actEl.textContent = act;
+    actEl.style.color = act === 'TRADE' ? '#6ee7b7' : '#f87171';
+
+    const pos = d.positions || [];
+    document.getElementById('atm_pos_count').textContent = pos.length;
+    document.getElementById('atm_positions').innerHTML = pos.length ? pos.map(p =>
+      '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #0f172a">' +
+        '<span class="'+(p.type==='BUY'?'green':'red')+'">'+p.type+'</span>' +
+        '<span>'+p.volume+'</span>' +
+        '<span>'+p.profit+'</span>' +
+        '<span style="font-size:10px;color:#94a3b8">'+(p.be?'BE ':'')+(p.ts?'TS ':'')+'</span>' +
+      '</div>'
+    ).join('') : '<div style="color:#64748b;padding:4px 0">Tidak ada posisi</div>';
+
+    const pen = d.pending_orders || [];
+    document.getElementById('atm_pend_count').textContent = pen.length;
+    document.getElementById('atm_pending').textContent = pen.length ? pen.map(o => o.type+' @ '+o.price).join(', ') : 'Tidak ada pending';
+    document.getElementById('atm_updated').textContent = d.last_update || '-';
+  } catch(e) { console.error('AT Monitor error:', e); }
+}
 
 // =====================================
 // Grid & Pending Orders
@@ -1267,17 +1464,19 @@ async function fetchLearningRecords() {
 }
 
 fetchData();
+loadAutoTradeEnabled();
 setInterval(fetchData, 15000);
 setInterval(() => { if (analyticsLoaded && document.getElementById('tab-analytics').style.display !== 'none') fetchAnalytics(); }, 30000);
 setInterval(() => { if (learningLoaded && document.getElementById('tab-learning').style.display !== 'none') fetchLearningRecords(); }, 45000);
 
-// Grid tab auto-refresh every 3 detik
+// Grid tab auto-refresh every 1 detik
 setInterval(() => {
   if (document.getElementById('tab-grid') && document.getElementById('tab-grid').style.display !== 'none') {
     fetchGridStatus();
     fetchManagePositions();
+    fetchAutoTradeMonitor();
   }
-}, 3000);
+}, 1000);
 </script>
 </body>
 </html>"""
