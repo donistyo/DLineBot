@@ -135,19 +135,19 @@ class SmartScalpingEngine:
 
         if ratio >= 2.0:
             level = "VERY_FAST"
-            score = 95
+            score = 90
         elif ratio >= 1.5:
             level = "FAST"
-            score = 80
+            score = 75
         elif ratio >= 1.0:
             level = "NORMAL"
-            score = 60
+            score = 65
         elif ratio >= 0.5:
             level = "SLOW"
-            score = 40
+            score = 55
         else:
             level = "VERY_SLOW"
-            score = 20
+            score = 45
 
         return {
             "level": level,
@@ -346,12 +346,12 @@ class SmartScalpingEngine:
         spread_ok = spread < atr * 0.3 if atr > 0 else True
 
         impulse = body_ratio >= 1.8 and vol_ratio >= 1.5 and spread_ok
-        strength = int(min(100,
+        strength = int(min(100, max(45,
             min(body_ratio, 3) / 3 * 40 +
             min(vol_ratio, 3) / 3 * 30 +
             (30 if spread_ok else 0) +
             (10 if body_ratio >= 2.5 else 0)
-        ))
+        )))
 
         signal = "NEUTRAL"
         if impulse:
@@ -406,13 +406,13 @@ class SmartScalpingEngine:
         max_possible = sum(weights.values()) * 100
         final_score = round(raw_score / max_possible * 100, 1) if max_possible > 0 else 0
 
-        if final_score >= 85:
+        if final_score >= 80:
             grade = "A+"
-        elif final_score >= 75:
+        elif final_score >= 70:
             grade = "A"
-        elif final_score >= 65:
+        elif final_score >= 60:
             grade = "B"
-        elif final_score >= 55:
+        elif final_score >= 50:
             grade = "C"
         else:
             grade = "D"
@@ -425,5 +425,5 @@ class SmartScalpingEngine:
             "grade": grade,
             "direction": direction,
             "details": details,
-            "action": "TRADE" if final_score >= 65 else "WAIT"
+            "action": "TRADE" if final_score >= 50 else "WAIT"
         }

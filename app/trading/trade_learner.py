@@ -14,7 +14,7 @@ from app.preprocessing.labeler import LabelGenerator
 
 class TradeLearner:
 
-    def __init__(self, model_name="xgboost_xauusd_m1.joblib", min_trades=20):
+    def __init__(self, model_name="xgboost_xauusd_m1.joblib", min_trades=5):
         self.model_name = model_name
         self.min_trades = min_trades
         self.trainer = XGBoostTrainer()

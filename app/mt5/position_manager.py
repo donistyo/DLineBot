@@ -4,7 +4,8 @@ import MetaTrader5 as mt5
 
 class PositionManager:
 
-    MT5Session.ensure_connection()
+    def __init__(self):
+        MT5Session.ensure_connection()
 
     def get_positions(self, symbol=None):
 

@@ -167,7 +167,7 @@ class LiveEngine:
 
             if mode == "scalp":
                 max_spread = 300
-                sl_points = 5
+                sl_points = 6
                 min_atr_val = 0.5
 
         self.decision_engine = DecisionEngine(
@@ -217,17 +217,17 @@ class LiveEngine:
         self.position_monitor = PositionMonitor()
 
         if mode == "scalp":
-            be_trigger = 3.0
-            trail_activation = 5.0
-            trail_distance = 2.0
-            exit_min_conf = 0.65
+            be_trigger = 999.0
+            trail_activation = 1.5
+            trail_distance = 0.5
+            exit_min_conf = 1.0
             daily_max_trade = 15
             daily_max_loss = -100
             daily_max_profit = 200
         else:
-            be_trigger = 10.0
-            trail_activation = 20.0
-            trail_distance = 10.0
+            be_trigger = 999.0
+            trail_activation = 999.0
+            trail_distance = 1.0
             exit_min_conf = 0.75
             daily_max_trade = 5
             daily_max_loss = -150
@@ -253,11 +253,6 @@ class LiveEngine:
         if mode == "scalp":
             sp_levels = [
                 {"profit": 1,   "action": "BREAK_EVEN",      "label": "Break Even"},
-                {"profit": 2,   "action": "TRAIL_LOOSE",      "label": "Trailing Start",   "distance": 1},
-                {"profit": 3,   "action": "TRAIL_TIGHT",      "label": "Trailing Rapat",   "distance": 0.5},
-                {"profit": 5,   "action": "LOCK_PROFIT",      "label": "Lock Profit +3",   "lock_at": 3},
-                {"profit": 10,  "action": "SCALE_OUT",        "label": "Scale Out 50%",    "close_pct": 50},
-                {"profit": 15,  "action": "TRAIL_FINAL",      "label": "Trailing Final",   "distance": 0.3},
             ]
         else:
             sp_levels = None
@@ -304,19 +299,21 @@ class LiveEngine:
 
         self.smart_scalping = SmartScalpingEngine()
 
-        time_exit_minutes = 60 if BROKER == "exness" and mode == "scalp" else (120 if mode == "scalp" else 480)
+        time_exit_minutes = 30 if BROKER == "exness" and mode == "scalp" else (120 if mode == "scalp" else 480)
         self.time_exit = TimeExit(
             max_minutes=time_exit_minutes
         )
 
         self.ai_exit = AIExit(
-            min_exit_confidence=0.80
+            min_exit_confidence=1.0,
+            lookback=999
         )
 
-        max_loss_pt = sl_points * 1.5 if BROKER == "exness" and mode == "scalp" else (sl_points * 2 if mode == "scalp" else 100)
         self.emergency_exit = EmergencyExit(
-            max_loss_per_trade=max_loss_pt,
-            max_daily_loss=150 if BROKER == "exness" else (200 if mode == "scalp" else 500)
+            max_loss_per_trade=9999,
+            max_daily_loss=9999,
+            max_drawdown_pct=100,
+            max_spread_mult=999
         )
 
         self.trade_learner = TradeLearner(
@@ -872,6 +869,16 @@ class LiveEngine:
                 )
 
             RiskView.show(risk)
+
+            if risk:
+                risk["lot_size"] = 0.01
+                risk["sl_points"] = 6.0
+                if decision["action"] == "BUY":
+                    risk["stop_loss"] = round(risk["entry_price"] - 6.0, 2)
+                    risk["take_profit"] = round(risk["entry_price"] + 4.0, 2)
+                elif decision["action"] == "SELL":
+                    risk["stop_loss"] = round(risk["entry_price"] + 6.0, 2)
+                    risk["take_profit"] = round(risk["entry_price"] - 4.0, 2)
 
             # ===============================
             # AI Trade Score

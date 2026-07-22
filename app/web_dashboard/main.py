@@ -6,14 +6,28 @@ from pathlib import Path
 import json
 import time
 import functools
+import threading
+import pandas as pd
+import MetaTrader5 as mt5
 from app.database.session import db_session
 from app.database.models import TradeLog, EquitySnapshot
 from app.mt5.session import MT5Session
 from app.mt5.parted_order import PartedOrder
+from app.mt5.position_manager import PositionManager
+from app.mt5.position_controller import PositionController
+from app.mt5.pending_order_manager import PendingOrderManager
+from app.mt5.order_builder import OrderBuilder
+from app.mt5.order_sender import OrderSender
 from app.notification.telegram_notifier import TelegramNotifier
 from app.trading.trade_learner import TradeLearner
 from app.trading.analytics import Analytics
 from app.trading.model_version import ModelVersionManager
+from app.trading.grid_manager import GridManager
+from app.trading.learning_manager import LearningManager
+from app.trading.trade_learner import TradeLearner
+from app.indicators.engine import IndicatorEngine
+from app.mt5.history_manager import HistoryManager
+from app.config.features import FEATURE_COLUMNS
 
 # =====================================
 # Simple in-memory cache (N seconds)
@@ -58,7 +72,129 @@ def cached(ttl=5):
     return decorator
 
 
+# =====================================
+# Background MT5 cache (biar ga blocking)
+# =====================================
+
+_mt5_cache = {"positions": [], "pending": [], "account": {}, "last_update": 0}
+_mt5_lock = threading.Lock()
+
+def _refresh_mt5_cache():
+    global _mt5_cache
+    while True:
+        try:
+            MT5Session.connect()
+            with _mt5_lock:
+                acc = mt5.account_info()
+                if acc:
+                    _mt5_cache["account"] = {
+                        "balance": acc.balance,
+                        "equity": acc.equity,
+                        "profit": acc.profit,
+                        "margin": acc.margin,
+                        "margin_free": acc.margin_free,
+                    }
+                pos = mt5.positions_get()
+                _mt5_cache["positions"] = [
+                    {"ticket": p.ticket, "type": "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
+                     "volume": p.volume, "symbol": p.symbol, "open_price": p.price_open,
+                     "current_price": p.price_current, "profit": round(p.profit, 2),
+                     "sl": p.sl or 0, "tp": p.tp or 0, "comment": p.comment}
+                    for p in (pos or [])
+                ]
+                pending = mt5.orders_get()
+                _mt5_cache["pending"] = [
+                    {"ticket": o.ticket, "type": "BUY_STOP" if o.type == mt5.ORDER_TYPE_BUY_STOP
+                     else "SELL_STOP" if o.type == mt5.ORDER_TYPE_SELL_STOP else str(o.type),
+                     "volume": o.volume_initial, "price": o.price_open,
+                     "sl": o.sl or 0, "tp": o.tp or 0, "symbol": o.symbol, "comment": o.comment}
+                    for o in (pending or [])
+                ]
+                _mt5_cache["last_update"] = time.time()
+        except:
+            pass
+        time.sleep(2)
+
+
+def _start_mt5_cache():
+    t = threading.Thread(target=_refresh_mt5_cache, daemon=True)
+    t.start()
+
+
+def get_cached_positions(symbol=None):
+    with _mt5_lock:
+        if symbol:
+            return [p for p in _mt5_cache["positions"] if p["symbol"] == symbol]
+        return list(_mt5_cache["positions"])
+
+
+def get_cached_pending(symbol=None):
+    with _mt5_lock:
+        if symbol:
+            return [p for p in _mt5_cache["pending"] if p["symbol"] == symbol]
+        return list(_mt5_cache["pending"])
+
+
+def get_cached_account():
+    with _mt5_lock:
+        return dict(_mt5_cache["account"])
+
+
+# =====================================
+# Manual trade learning (save features, track outcomes, retrain)
+# =====================================
+
+_learner = TradeLearner(min_trades=5)
+_history_mgr = HistoryManager()
+_learning_mgr = LearningManager(_learner, _history_mgr)
+_indicator_engine = IndicatorEngine()
+
+
+def save_trade_features(ticket, signal, confidence):
+    try:
+        import MetaTrader5 as mt5
+        rates = mt5.copy_rates_from_pos("XAUUSDc", mt5.TIMEFRAME_M1, 0, 2000)
+        if rates is None or len(rates) < 200:
+            return False
+        df = pd.DataFrame(rates)
+        df["time"] = pd.to_datetime(df["time"], unit="s")
+        df = _indicator_engine.calculate(df)
+        df = df.dropna()
+        if df.empty:
+            return False
+        last = df.iloc[-1]
+        features = {col: last[col] for col in FEATURE_COLUMNS if col in last.index}
+        _learning_mgr.track_open(ticket=ticket, features=features, signal=signal, confidence=confidence)
+        return True
+    except Exception as e:
+        print(f"[LEARNING ERROR] {e}")
+        return False
+
+
+def _check_closed_loop():
+    while True:
+        try:
+            MT5Session.connect()
+            _learning_mgr.check_closed()
+        except:
+            pass
+        time.sleep(30)
+
+
+def _start_learning_loop():
+    t = threading.Thread(target=_check_closed_loop, daemon=True)
+    t.start()
+
+
 app = FastAPI(title="DLineBot Dashboard")
+
+
+@app.on_event("startup")
+def _startup():
+    _start_mt5_cache()
+    _start_learning_loop()
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -274,6 +410,8 @@ def api_manual_order(data: dict):
         order = PartedOrder(dry_run=False)
         result = order.execute(symbol, signal, volume, entry, sl, tp1, tp2)
         order.notify_telegram(result)
+        ticket = result.get("result_1", {}).get("order", 0) if isinstance(result, dict) else 0
+        save_trade_features(ticket, signal, 0.5)
         return {"success": True, "result": result}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -291,6 +429,8 @@ def api_dry_run(data: dict):
 
     order = PartedOrder(dry_run=True)
     result = order.execute(symbol, signal, volume, entry, sl, tp1, tp2)
+    ticket = result.get("result_1", {}).get("order", 0) if isinstance(result, dict) else 0
+    save_trade_features(ticket, signal, 0.5)
     return {"success": True, "result": result}
 
 
@@ -332,6 +472,144 @@ def api_get_parted_orders(limit: int = 20):
         for t in trades
     ]
 
+
+# =====================================
+# Grid & Pending Order API
+# =====================================
+
+@app.post("/api/grid/place")
+def api_grid_place(data: dict):
+    symbol = data.get("symbol", "XAUUSDc")
+    layers = int(data.get("layers", 3))
+    spacing = float(data.get("spacing", 2.0))
+    lot = float(data.get("lot", 0.01))
+    sl_dist = float(data.get("sl_dist", 6.0))
+    tp_dist = float(data.get("tp_dist", 8.0))
+    dry_run = data.get("dry_run", True)
+
+    if not dry_run:
+        if not MT5Session.connect():
+            return {"success": False, "error": "Gagal konek MT5"}
+
+    try:
+        import MetaTrader5 as mt5
+        if not mt5.symbol_info_tick(symbol):
+            MT5Session.connect()
+        tick = mt5.symbol_info_tick(symbol)
+        current_price = tick.bid if tick else 4000.0
+    except:
+        return {"success": False, "error": "Gagal ambil harga"}
+
+    gm = GridManager(
+        symbol=symbol,
+        dry_run=dry_run,
+        grid_layers=layers,
+        lot_size=lot,
+        magic=10002,
+    )
+    gm.grid_atr_multiplier = spacing / 10.0
+    gm.sl_atr_multiplier = sl_dist / 10.0
+    gm.rr_ratio = tp_dist / sl_dist if sl_dist > 0 else 2.0
+
+    try:
+        results = gm.place_grid(current_price, atr=10.0)
+        return {"success": True, "count": len(results), "results": results}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/grid/cancel")
+def api_grid_cancel(data: dict):
+    symbol = data.get("symbol", "XAUUSDc")
+    dry_run = data.get("dry_run", False)
+
+    mgr = PendingOrderManager(dry_run=dry_run)
+    count = mgr.cancel_all(symbol)
+    return {"success": True, "cancelled": count}
+
+
+@app.get("/api/grid/status")
+def api_grid_status():
+    symbol = "XAUUSDc"
+    pending = get_cached_pending(symbol)
+    positions = get_cached_positions(symbol)
+    return {
+        "pending_orders": pending,
+        "pending_count": len(pending),
+        "open_positions": positions,
+    }
+
+
+# =====================================
+# Position Management API
+# =====================================
+
+@app.post("/api/position/modify")
+def api_position_modify(data: dict):
+    ticket = int(data.get("ticket", 0))
+    sl = float(data["sl"]) if data.get("sl") else None
+    tp = float(data["tp"]) if data.get("tp") else None
+    dry_run = data.get("dry_run", True)
+
+    if ticket <= 0:
+        return {"success": False, "error": "Ticket tidak valid"}
+
+    if not MT5Session.connect():
+        return {"success": False, "error": "Gagal konek MT5"}
+
+    try:
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions or len(positions) == 0:
+            return {"success": False, "error": "Posisi tidak ditemukan"}
+        position = positions[0]
+    except:
+        return {"success": False, "error": "Gagal ambil posisi"}
+
+    controller = PositionController()
+    if sl and tp:
+        result = controller.modify_sl_tp(position, sl, tp)
+    elif sl:
+        result = controller.modify_sl(position, sl)
+    elif tp:
+        result = controller.modify_tp(position, tp)
+    else:
+        return {"success": False, "error": "SL atau TP harus diisi"}
+
+    return {"success": True, "result": result}
+
+
+@app.post("/api/position/close")
+def api_position_close(data: dict):
+    ticket = int(data.get("ticket", 0))
+    dry_run = data.get("dry_run", True)
+
+    if ticket <= 0:
+        return {"success": False, "error": "Ticket tidak valid"}
+
+    if not MT5Session.connect():
+        return {"success": False, "error": "Gagal konek MT5"}
+
+    try:
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions or len(positions) == 0:
+            return {"success": False, "error": "Posisi tidak ditemukan"}
+        position = positions[0]
+    except:
+        return {"success": False, "error": "Gagal ambil posisi"}
+
+    controller = PositionController()
+    result = controller.close(position)
+    return {"success": True, "result": result}
+
+
+@app.get("/api/positions/manage")
+def api_positions_manage():
+    return {"positions": get_cached_positions(), "count": len(get_cached_positions())}
+
+
+# =====================================
+# Analytics API
+# =====================================
 
 @app.get("/api/analytics/summary")
 def api_analytics_summary():
@@ -417,6 +695,7 @@ tr:hover { background:#1e3a5f; }
   <button class="tab-btn" onclick="switchTab('analytics',this)">Analytics</button>
   <button class="tab-btn" onclick="switchTab('learning',this)">AI Learning</button>
   <button class="tab-btn" onclick="switchTab('manual',this)">Manual Order</button>
+  <button class="tab-btn" onclick="switchTab('grid',this)">Grid & Pending</button>
 </div>
 
 <div id="tab-main">
@@ -513,6 +792,38 @@ tr:hover { background:#1e3a5f; }
 
 </div>
 
+<div id="tab-grid" style="display:none">
+
+<h2>Grid Order (Buy Stop / Sell Stop)</h2>
+<div style="background:#1e293b;border-radius:6px;padding:16px;max-width:500px">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div><label style="font-size:11px;color:#94a3b8">Symbol</label><br><input id="gr_symbol" value="XAUUSDc" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">Layers</label><br><input id="gr_layers" value="3" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">Spacing (pt)</label><br><input id="gr_spacing" value="3.0" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">Lot per level</label><br><input id="gr_lot" value="0.01" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">SL Distance (pt)</label><br><input id="gr_sl" value="6.0" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">TP Distance (pt)</label><br><input id="gr_tp" value="8.0" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+  </div>
+  <div style="margin-top:12px;display:flex;gap:8px">
+    <button onclick="placeGrid(false)" style="flex:1;padding:8px;background:#f97316;color:#fff;border:none;border-radius:4px;font-weight:600;cursor:pointer">PLACE GRID</button>
+    <button onclick="placeGrid(true)" style="padding:8px;background:#334155;color:#94a3b8;border:none;border-radius:4px;cursor:pointer">Dry Run</button>
+    <button onclick="cancelGrid()" style="padding:8px;background:#dc2626;color:#fff;border:none;border-radius:4px;cursor:pointer">Cancel All</button>
+  </div>
+  <div id="gr_result" style="margin-top:12px;font-size:12px;color:#6ee7b7"></div>
+</div>
+
+<h2>Pending Orders</h2>
+<table><thead><tr>
+  <th>Ticket</th><th>Type</th><th>Vol</th><th>Price</th><th>SL</th><th>TP</th><th>Comment</th>
+</tr></thead><tbody id="pendingOrders"></tbody></table>
+
+<h2>Open Positions</h2>
+<table><thead><tr>
+  <th>Ticket</th><th>Type</th><th>Vol</th><th>Entry</th><th>Current</th><th>Profit</th><th>SL</th><th>TP</th><th>Action</th>
+</tr></thead><tbody id="managePositions"></tbody></table>
+
+</div>
+
 <div id="tab-learning" style="display:none">
 
 <h2>AI Learning Status</h2>
@@ -549,6 +860,10 @@ function switchTab(name, el) {
   }
   if (name === 'manual') {
     fetchPartedOrders();
+  }
+  if (name === 'grid') {
+    fetchGridStatus();
+    fetchManagePositions();
   }
   if (name === 'learning' && !learningLoaded) {
     learningLoaded = true;
@@ -809,6 +1124,88 @@ document.getElementById('partedOrders').addEventListener('click', function(e) {
   window.scrollTo(0, document.getElementById('tab-manual').offsetTop - 10);
 });
 
+// =====================================
+// Grid & Pending Orders
+// =====================================
+
+async function fetchGridStatus() {
+  try {
+    const data = await fetchJson('/api/grid/status', {pending_orders:[],open_positions:[]});
+    const pending = data.pending_orders || [];
+    document.getElementById('pendingOrders').innerHTML = pending.map(o =>
+      '<tr><td>'+o.ticket+'</td><td>'+o.type+'</td><td>'+o.volume+'</td><td>'+o.price+'</td><td>'+(o.sl||'-')+'</td><td>'+(o.tp||'-')+'</td><td>'+(o.comment||'-')+'</td></tr>'
+    ).join('') || '<tr><td colspan="7" style="text-align:center;color:#64748b">Tidak ada pending order</td></tr>';
+  } catch(e) { console.error('Grid status error:', e); }
+}
+
+async function fetchManagePositions() {
+  try {
+    const data = await fetchJson('/api/positions/manage', {positions:[],count:0});
+    const pos = data.positions || [];
+    document.getElementById('managePositions').innerHTML = pos.map(p =>
+      '<tr><td>'+p.ticket+'</td><td class="'+(p.type==='BUY'?'green':'red')+'">'+p.type+'</td><td>'+p.volume+'</td><td>'+p.open_price+'</td><td>'+p.current_price+'</td><td class="'+(p.profit>=0?'green':'red')+'">'+(p.profit>=0?'+':'')+p.profit+'</td><td>'+(p.sl||'-')+'</td><td>'+(p.tp||'-')+'</td><td><button onclick="closePosition('+p.ticket+')" style="padding:2px 6px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:10px">Close</button></td></tr>'
+    ).join('') || '<tr><td colspan="9" style="text-align:center;color:#64748b">Tidak ada posisi</td></tr>';
+  } catch(e) { console.error('Manage positions error:', e); }
+}
+
+async function placeGrid(dryRun) {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Placing...';
+  const payload = {
+    symbol: document.getElementById('gr_symbol').value || 'XAUUSDc',
+    layers: parseInt(document.getElementById('gr_layers').value) || 3,
+    spacing: parseFloat(document.getElementById('gr_spacing').value) || 3.0,
+    lot: parseFloat(document.getElementById('gr_lot').value) || 0.01,
+    sl_dist: parseFloat(document.getElementById('gr_sl').value) || 6.0,
+    tp_dist: parseFloat(document.getElementById('gr_tp').value) || 8.0,
+    dry_run: dryRun,
+  };
+  try {
+    const res = await fetch('/api/grid/place', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(r=>r.json());
+    const el = document.getElementById('gr_result');
+    if (res.success) {
+      el.style.color = '#6ee7b7';
+      el.textContent = 'Grid placed: ' + res.count + ' orders';
+    } else {
+      el.style.color = '#fca5a5';
+      el.textContent = 'FAILED: ' + (res.error||'Unknown');
+    }
+    fetchGridStatus();
+  } catch(e) {
+    document.getElementById('gr_result').style.color = '#fca5a5';
+    document.getElementById('gr_result').textContent = 'Error: ' + e.message;
+  }
+  btn.disabled = false;
+  btn.textContent = dryRun ? 'Dry Run' : 'PLACE GRID';
+}
+
+async function cancelGrid() {
+  const payload = { symbol: document.getElementById('gr_symbol').value || 'XAUUSDc' };
+  try {
+    const res = await fetch('/api/grid/cancel', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(r=>r.json());
+    document.getElementById('gr_result').style.color = '#6ee7b7';
+    document.getElementById('gr_result').textContent = 'Cancelled: ' + (res.cancelled||0) + ' orders';
+    fetchGridStatus();
+  } catch(e) {
+    document.getElementById('gr_result').style.color = '#fca5a5';
+    document.getElementById('gr_result').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function closePosition(ticket) {
+  if (!confirm('Close position '+ticket+'?')) return;
+  try {
+    const res = await fetch('/api/position/close', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:ticket})}).then(r=>r.json());
+    if (res.success) {
+      fetchManagePositions();
+      fetchGridStatus();
+    } else {
+      alert('Failed: '+(res.error||'Unknown'));
+    }
+  } catch(e) { alert('Error: '+e.message); }
+}
+
 function sendManualOrder(dryRun) {
   const btn = event.target;
   btn.disabled = true;
@@ -873,6 +1270,14 @@ fetchData();
 setInterval(fetchData, 15000);
 setInterval(() => { if (analyticsLoaded && document.getElementById('tab-analytics').style.display !== 'none') fetchAnalytics(); }, 30000);
 setInterval(() => { if (learningLoaded && document.getElementById('tab-learning').style.display !== 'none') fetchLearningRecords(); }, 45000);
+
+// Grid tab auto-refresh every 3 detik
+setInterval(() => {
+  if (document.getElementById('tab-grid') && document.getElementById('tab-grid').style.display !== 'none') {
+    fetchGridStatus();
+    fetchManagePositions();
+  }
+}, 3000);
 </script>
 </body>
 </html>"""
