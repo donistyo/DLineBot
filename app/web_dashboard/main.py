@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 import json
 import time
@@ -203,6 +203,20 @@ app.add_middleware(
 )
 
 
+@app.get("/api/dashboard-url")
+def get_dashboard_url():
+    try:
+        env_path = Path(".env")
+        if env_path.exists():
+            for line in env_path.read_text().splitlines():
+                if line.startswith("DASHBOARD_URL="):
+                    val = line.split("=", 1)[1].strip().strip("'\"")
+                    return {"url": val}
+        return {"url": "http://127.0.0.1:8000"}
+    except Exception:
+        return {"url": "http://127.0.0.1:8000"}
+
+
 @app.get("/api/trades")
 @cached(ttl=5)
 def get_trades(limit=50):
@@ -284,24 +298,16 @@ def get_learning():
     return learner.get_learning_stats()
 
 
-@app.get("/api/scalping")
-@cached(ttl=5)
-def get_scalping():
+@app.get("/api/scalping/engine")
+@cached(ttl=3)
+def get_scalping_engine():
     path = Path("runtime/scalping.json")
     if not path.exists():
-        return {
-            "scalp_score": {"score": 0, "grade": "-", "direction": "WAIT", "action": "WAIT"},
-            "momentum": {},
-            "speed": {},
-            "liquidity": {},
-            "fake_breakout": {},
-            "session": {},
-            "impulse": {}
-        }
+        return {"scalp_score": {"score": 0, "grade": "-", "direction": "WAIT", "action": "WAIT"}}
     try:
         return json.loads(path.read_text())
     except Exception:
-        return {"error": "Gagal membaca scalping snapshot."}
+        return {"scalp_score": {"score": 0, "grade": "-", "direction": "WAIT", "action": "WAIT"}}
 
 
 # =====================================
@@ -541,6 +547,168 @@ def api_grid_status():
 
 
 # =====================================
+# Chart API
+# =====================================
+
+@app.get("/api/chart/candles")
+def api_chart_candles():
+    candles = []
+    try:
+        MT5Session.connect()
+        from_ts = int((datetime.now() - timedelta(hours=12)).timestamp())
+        to_ts = int(datetime.now().timestamp())
+        rates = mt5.copy_rates_range("XAUUSDc", mt5.TIMEFRAME_M1, from_ts, to_ts)
+        if rates is not None:
+            n = len(rates)
+            for i in range(max(0, n - 200), n):
+                r = rates[i]
+                candles.append({
+                    "time": datetime.fromtimestamp(int(r[0])).strftime("%H:%M"),
+                    "open": float(r[1]),
+                    "high": float(r[2]),
+                    "low": float(r[3]),
+                    "close": float(r[4]),
+                })
+    except Exception as e:
+        import traceback
+        with open("runtime/chart_error.log","a") as fe:
+            fe.write(f"{datetime.now()} {e}\n{traceback.format_exc()}\n")
+    return {"candles": candles, "count": len(candles)}
+
+# =====================================
+# Intraday API
+# =====================================
+
+@app.get("/api/intraday")
+def api_intraday():
+    today_start = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    to_date = int(datetime.now().timestamp())
+    try:
+        MT5Session.connect()
+        deals = mt5.history_deals_get(today_start, to_date)
+    except:
+        deals = None
+
+    data = {
+        "today": {"trades": 0, "profit": 0.0, "wins": 0, "losses": 0, "be": 0},
+        "hourly": {},
+        "recent": [],
+    }
+
+    if deals:
+        total_profit = 0.0
+        wins = 0
+        losses = 0
+        be = 0
+        hourly = {}
+        recent = []
+
+        for d in sorted(deals, key=lambda x: x.time, reverse=True):
+            total_profit += d.profit
+            if d.profit > 0:
+                wins += 1
+            elif d.profit < 0:
+                losses += 1
+            else:
+                be += 1
+
+            dt = datetime.fromtimestamp(d.time)
+            hour_key = dt.strftime("%H:00")
+            hourly[hour_key] = hourly.get(hour_key, 0) + d.profit
+
+            if len(recent) < 20:
+                recent.append({
+                    "ticket": d.ticket,
+                    "symbol": d.symbol,
+                    "profit": round(d.profit, 2),
+                    "time": dt.strftime("%H:%M:%S"),
+                    "magic": d.magic,
+                    "comment": d.comment or "",
+                })
+
+        n = len(deals)
+        data["today"] = {
+            "trades": n,
+            "profit": round(total_profit, 2),
+            "wins": wins,
+            "losses": losses,
+            "be": be,
+            "wr": round(wins / n * 100, 1) if n else 0,
+        }
+        data["hourly"] = hourly
+        data["recent"] = recent
+
+    account = get_cached_account()
+    data["account"] = {
+        "balance": account.get("balance", 0),
+        "equity": account.get("equity", 0),
+    }
+
+    return data
+
+# =====================================
+# Scalping API
+# =====================================
+
+@app.get("/api/scalping")
+def api_scalping():
+    today_start = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    to_date = int(datetime.now().timestamp())
+    try:
+        MT5Session.connect()
+        deals = mt5.history_deals_get(today_start, to_date)
+    except:
+        deals = None
+
+    data = {
+        "performance": {"trades": 0, "profit": 0.0, "wins": 0, "losses": 0, "be": 0, "wr": 0, "avg_win": 0, "avg_loss": 0, "best": 0, "worst": 0},
+        "history": [],
+        "scalp_score": {"score": 0, "grade": "-", "direction": "NEUTRAL", "action": "WAIT"},
+    }
+
+    try:
+        with open("runtime/scalping.json") as f:
+            s = json.load(f)
+            if "scalp_score" in s:
+                data["scalp_score"] = s["scalp_score"]
+    except:
+        pass
+
+    if deals:
+        profits = [d.profit for d in deals]
+        total = sum(profits)
+        wins = [p for p in profits if p > 0]
+        losses = [p for p in profits if p < 0]
+        be = sum(1 for p in profits if p == 0)
+        n = len(deals)
+
+        data["performance"] = {
+            "trades": n,
+            "profit": round(total, 2),
+            "wins": len(wins),
+            "losses": len(losses),
+            "be": be,
+            "wr": round(len(wins) / n * 100, 1) if n else 0,
+            "avg_win": round(sum(wins) / len(wins), 2) if wins else 0,
+            "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0,
+            "best": round(max(wins), 2) if wins else 0,
+            "worst": round(min(losses), 2) if losses else 0,
+        }
+
+        for d in sorted(deals, key=lambda x: x.time, reverse=True)[:50]:
+            dt = datetime.fromtimestamp(d.time)
+            data["history"].append({
+                "ticket": d.ticket,
+                "symbol": d.symbol,
+                "profit": round(d.profit, 2),
+                "time": dt.strftime("%H:%M"),
+                "magic": d.magic,
+                "comment": d.comment or "",
+            })
+
+    return data
+
+# =====================================
 # Auto-Trade Monitor API
 # =====================================
 
@@ -728,65 +896,155 @@ HTML_PAGE = """<!DOCTYPE html>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
-body { font-family:'Segoe UI',sans-serif; background:#0f172a; color:#e2e8f0; padding:12px; }
-h1 { font-size:20px; margin-bottom:12px; color:#3b82f6; display:flex; align-items:center; gap:10px; }
-h1 small { font-size:13px; color:#64748b; font-weight:400; }
-h2 { font-size:14px; margin:16px 0 6px; color:#94a3b8; border-left:3px solid #3b82f6; padding-left:8px; }
-.grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(130px,1fr)); gap:6px; margin-bottom:8px; }
-.card { background:#1e293b; padding:8px 10px; border-radius:6px; }
-.card .lbl { font-size:10px; color:#64748b; text-transform:uppercase; }
-.card .val { font-size:16px; font-weight:700; margin-top:2px; }
-.chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px; }
+body { font-family:'Inter','Segoe UI',sans-serif; background:linear-gradient(135deg,#0c1222 0%,#1a1a2e 50%,#16213e 100%); color:#e2e8f0; min-height:100vh; }
+.app { display:flex; min-height:100vh; }
+.sidebar { width:200px; background:rgba(15,23,42,0.85); backdrop-filter:blur(12px); border-right:1px solid rgba(59,130,246,0.15); padding:16px 10px; flex-shrink:0; position:sticky; top:0; height:100vh; overflow-y:auto; }
+.sidebar-logo { display:flex; align-items:center; gap:8px; padding:0 6px 16px; border-bottom:1px solid rgba(59,130,246,0.1); margin-bottom:12px; }
+.sidebar-logo img { height:36px; border-radius:4px; }
+.sidebar-logo span { font-size:15px; font-weight:700; background:linear-gradient(135deg,#60a5fa,#a78bfa); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+.sidebar-item { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px; color:#94a3b8; cursor:pointer; font-size:13px; transition:all 0.2s; margin-bottom:2px; }
+.sidebar-item:hover { background:rgba(59,130,246,0.1); color:#e2e8f0; }
+.sidebar-item.active { background:rgba(59,130,246,0.2); color:#60a5fa; font-weight:600; box-shadow:inset 2px 0 0 #3b82f6; }
+.sidebar-icon { font-size:16px; width:20px; text-align:center; }
+.main-content { flex:1; padding:20px 24px; overflow-y:auto; max-height:100vh; }
+h2 { font-size:13px; margin:20px 0 8px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; font-weight:600; display:flex; align-items:center; gap:8px; }
+h2:before { content:''; display:inline-block; width:3px; height:14px; background:linear-gradient(180deg,#3b82f6,#8b5cf6); border-radius:2px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px,1fr)); gap:8px; margin-bottom:12px; }
+.card { background:rgba(30,41,59,0.6); backdrop-filter:blur(4px); padding:12px 14px; border-radius:10px; border:1px solid rgba(59,130,246,0.08); transition:all 0.2s; }
+.card:hover { border-color:rgba(59,130,246,0.25); transform:translateY(-1px); }
+.card .lbl { font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.3px; margin-bottom:4px; }
+.card .val { font-size:17px; font-weight:700; }
+.chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px; }
 @media(max-width:900px) { .chart-grid { grid-template-columns:1fr; } }
-.chart-container { background:#1e293b; border-radius:6px; padding:8px; }
+.chart-container { background:rgba(30,41,59,0.5); backdrop-filter:blur(4px); border-radius:10px; padding:12px; border:1px solid rgba(59,130,246,0.08); }
 .green { color:#6ee7b7; }
 .red { color:#fca5a5; }
-.blue { color:#3b82f6; }
+.blue { color:#60a5fa; }
 .yellow { color:#fbbf24; }
 .purple { color:#a78bfa; }
-table { width:100%; border-collapse:collapse; background:#1e293b; border-radius:6px; overflow:hidden; font-size:11px; }
-th { background:#334155; text-align:left; padding:4px 6px; color:#94a3b8; text-transform:uppercase; font-size:10px; }
-td { padding:4px 6px; border-top:1px solid #334155; }
-tr:hover { background:#1e3a5f; }
-.badge { display:inline-block; padding:1px 5px; border-radius:3px; font-size:10px; font-weight:600; }
-.buy { background:#065f46; color:#6ee7b7; }
-.sell { background:#7f1d1d; color:#fca5a5; }
-.hold { background:#451a03; color:#fdba74; }
+table { width:100%; border-collapse:separate; border-spacing:0; background:rgba(30,41,59,0.5); backdrop-filter:blur(4px); border-radius:10px; overflow:hidden; font-size:11px; border:1px solid rgba(59,130,246,0.08); }
+.table-wrap { overflow-x:auto; border-radius:10px; }
+th { background:rgba(51,65,85,0.5); text-align:left; padding:6px 8px; color:#94a3b8; text-transform:uppercase; font-size:9px; letter-spacing:0.3px; }
+td { padding:5px 8px; border-top:1px solid rgba(51,65,85,0.3); }
+tr:hover td { background:rgba(59,130,246,0.05); }
+.badge { display:inline-block; padding:2px 6px; border-radius:4px; font-size:9px; font-weight:600; }
+.buy { background:rgba(6,95,70,0.3); color:#6ee7b7; }
+.sell { background:rgba(127,29,29,0.3); color:#fca5a5; }
+.hold { background:rgba(69,26,3,0.3); color:#fdba74; }
 .status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; }
-.status-running { background:#6ee7b7; }
+.status-running { background:#6ee7b7; box-shadow:0 0 6px rgba(110,231,183,0.4); }
 .status-stopped { background:#fca5a5; }
+.hamburger-btn { display:none; align-items:center; justify-content:center; width:32px; height:32px; background:rgba(59,130,246,0.1); border:none; border-radius:6px; color:#94a3b8; font-size:18px; cursor:pointer; transition:all 0.2s; }
+.hamburger-btn:hover { background:rgba(59,130,246,0.2); color:#e2e8f0; }
+.mobile-logo { display:none; height:28px; border-radius:4px; }
+.header-left { display:flex; align-items:center; gap:6px; }
+.mobile-menu { display:none; }
 .heatmap-grid { display:grid; grid-template-columns:repeat(24,1fr); gap:1px; font-size:8px; }
 .heatmap-cell { padding:2px 0; text-align:center; border-radius:1px; }
 .heatmap-label { font-size:8px; color:#64748b; }
 .auto-refresh { font-size:10px; color:#64748b; margin-bottom:6px; }
-.tab-bar { display:flex; gap:4px; margin-bottom:10px; }
-.tab-btn { padding:6px 14px; border-radius:4px; border:none; background:#1e293b; color:#94a3b8; cursor:pointer; font-size:12px; }
-.tab-btn.active { background:#3b82f6; color:#fff; font-weight:600; }
-.tab-btn:hover { background:#334155; }
-@media(max-width:600px) {
+.header-bar { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; flex-wrap:wrap; gap:8px; }
+.header-bar h1 { font-size:18px; font-weight:700; background:linear-gradient(135deg,#e2e8f0,#94a3b8); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+.header-bar .header-right { display:flex; align-items:center; gap:12px; font-size:11px; color:#64748b; }
+.header-badge { display:flex; align-items:center; gap:4px; background:rgba(59,130,246,0.1); padding:4px 10px; border-radius:6px; color:#60a5fa; font-weight:500; }
+@media(max-width:768px) {
+  .sidebar { width:54px; padding:12px 6px; }
+  .sidebar-logo span { display:none; }
+  .sidebar-logo img { height:28px; }
+  .sidebar-item span { display:none; }
+  .sidebar-item { justify-content:center; padding:8px; }
+  .sidebar-icon { font-size:18px; width:auto; }
+  .main-content { padding:12px; }
   .grid { grid-template-columns:repeat(2,1fr); }
   .chart-grid { grid-template-columns:1fr; }
-  body { padding:6px; }
-  h1 { font-size:16px; }
-  .card .val { font-size:14px; }
+  .card .val { font-size:15px; }
   .heatmap-grid { grid-template-columns:repeat(12,1fr); }
+  .hamburger-btn { display:none; }
+}
+@media(max-width:600px) {
+  .sidebar { display:none; }
+  .sidebar-backdrop { display:none !important; }
+  .main-content { padding:8px; }
+  .grid { grid-template-columns:1fr; }
+  .card .val { font-size:14px; }
+  .header-bar h1 { font-size:15px; }
+  .header-badge { padding:3px 6px; font-size:10px; }
+  .hamburger-btn { display:flex; background:none; font-size:22px; color:#e2e8f0; width:auto; height:auto; }
+  .mobile-logo { display:inline-block; }
+  .header-bar .header-left { display:flex; align-items:center; gap:4px; }
+  .sidebar-logo img { display:none; }
+  h2 { font-size:11px; }
+  table { font-size:10px; }
+  th, td { padding:4px 5px; }
+  .heatmap-grid { grid-template-columns:repeat(8,1fr); }
+  .mobile-menu { display:none; flex-direction:column; background:rgba(15,23,42,0.95); backdrop-filter:blur(12px); border-bottom:1px solid rgba(59,130,246,0.15); padding:4px 8px; margin-bottom:8px; border-radius:0 0 10px 10px; }
+  .mobile-menu.open { display:flex; }
+  .mobile-menu .sidebar-item { padding:10px 12px; font-size:14px; }
+  .mobile-menu .sidebar-item span { display:inline; }
+  .mobile-menu .sidebar-item .sidebar-icon { font-size:18px; width:24px; }
+}
+@media(max-width:400px) {
+  .main-content { padding:6px; }
+  .grid { gap:5px; }
+  .card { padding:8px 10px; }
+  .card .val { font-size:13px; }
+  .chart-container { padding:8px; }
 }
 </style>
 </head>
 <body>
 
-<h1>
-  <img src="/logo" style="height:64px;margin-right:10px;border-radius:4px" alt="logo">
-  <small id="serverTime"></small>
-  <span style="margin-left:auto;font-size:11px;color:#64748b" id="refreshStatus">Auto 5s</span>
-</h1>
+<div class="app">
+<div class="sidebar">
+  <div class="sidebar-logo">
+    <img src="/logo" alt="logo">
+  </div>
+  <div class="sidebar-item active" onclick="switchTab('main',this)">
+    <span class="sidebar-icon">&#9632;</span><span>Overview</span>
+  </div>
+  <div class="sidebar-item" onclick="switchTab('analytics',this)">
+    <span class="sidebar-icon">&#9881;</span><span>Analytics</span>
+  </div>
+  <div class="sidebar-item" onclick="switchTab('learning',this)">
+    <span class="sidebar-icon">&#9855;</span><span>AI Learning</span>
+  </div>
+  <div class="sidebar-item" onclick="switchTab('manual',this)">
+    <span class="sidebar-icon">&#9998;</span><span>Manual Order</span>
+  </div>
+  <div class="sidebar-item" onclick="switchTab('grid',this)">
+    <span class="sidebar-icon">&#9776;</span><span>Grid &amp; Pending</span>
+  </div>
+  <div class="sidebar-item" onclick="switchTab('scalping',this)">
+    <span class="sidebar-icon">&#9889;</span><span>Scalping</span>
+  </div>
+  <div class="sidebar-item" onclick="switchTab('intraday',this)">
+    <span class="sidebar-icon">&#128202;</span><span>Intraday</span>
+  </div>
+</div>
+<div class="sidebar-backdrop" onclick="closeSidebar()"></div>
+<div class="main-content">
 
-<div class="tab-bar">
-  <button class="tab-btn active" onclick="switchTab('main',this)">Overview</button>
-  <button class="tab-btn" onclick="switchTab('analytics',this)">Analytics</button>
-  <button class="tab-btn" onclick="switchTab('learning',this)">AI Learning</button>
-  <button class="tab-btn" onclick="switchTab('manual',this)">Manual Order</button>
-  <button class="tab-btn" onclick="switchTab('grid',this)">Grid & Pending</button>
+<div class="header-bar">
+  <div class="header-left">
+    <button class="hamburger-btn" onclick="toggleSidebar()">&#9776;</button>
+    <img src="/logo" alt="logo" class="mobile-logo">
+  </div>
+  <h1>Dashboard</h1>
+  <div class="header-right">
+    <span class="header-badge" id="publicUrlBadge" style="cursor:pointer" onclick="copyUrl()" title="Click to copy">&#128279; <span id="publicUrl">tunnel...</span></span>
+    <span class="header-badge"><span class="status-dot status-running" id="headerStatusDot"></span><span id="headerStatus">Running</span></span>
+    <span id="serverTime"></span>
+  </div>
+</div>
+
+<div class="mobile-menu" id="mobileMenu">
+  <div class="sidebar-item active" onclick="switchTab('main',this)"><span class="sidebar-icon">&#9632;</span><span>Overview</span></div>
+  <div class="sidebar-item" onclick="switchTab('analytics',this)"><span class="sidebar-icon">&#9881;</span><span>Analytics</span></div>
+  <div class="sidebar-item" onclick="switchTab('learning',this)"><span class="sidebar-icon">&#9855;</span><span>AI Learning</span></div>
+  <div class="sidebar-item" onclick="switchTab('manual',this)"><span class="sidebar-icon">&#9998;</span><span>Manual Order</span></div>
+  <div class="sidebar-item" onclick="switchTab('grid',this)"><span class="sidebar-icon">&#9776;</span><span>Grid & Pending</span></div>
+  <div class="sidebar-item" onclick="switchTab('scalping',this)"><span class="sidebar-icon">&#9889;</span><span>Scalping</span></div>
+  <div class="sidebar-item" onclick="switchTab('intraday',this)"><span class="sidebar-icon">&#128202;</span><span>Intraday</span></div>
 </div>
 
 <div id="tab-main">
@@ -796,15 +1054,11 @@ tr:hover { background:#1e3a5f; }
 <h2>AI Signal</h2>
 <div class="grid" id="signalBox"></div>
 
-<h2>Smart Scalping Engine</h2>
-<div class="grid" id="scalpingScoreBox"></div>
-<div class="grid" id="scalpingEngineBox"></div>
-
 <h2>Open Position</h2>
 <div id="positionInfo" style="margin-bottom:6px;font-size:12px;"></div>
-<table><thead><tr>
+<div class="table-wrap"><table><thead><tr>
   <th>Ticket</th><th>Type</th><th>Vol</th><th>Entry</th><th>Current</th><th>Profit</th><th>SL</th><th>TP</th>
-</tr></thead><tbody id="positions"></tbody></table>
+</tr></thead><tbody id="positions"></tbody></table></div>
 
 <h2>Equity Curve</h2>
 <div class="chart-container">
@@ -812,9 +1066,9 @@ tr:hover { background:#1e3a5f; }
 </div>
 
 <h2>Trade History</h2>
-<table><thead><tr>
+<div class="table-wrap"><table><thead><tr>
   <th>Time</th><th>Sig</th><th>Conf</th><th>Action</th><th>Status</th><th>Entry</th><th>Profit</th><th>Lot</th>
-</tr></thead><tbody id="trades"></tbody></table>
+</tr></thead><tbody id="trades"></tbody></table></div>
 
 </div>
 
@@ -877,9 +1131,9 @@ tr:hover { background:#1e3a5f; }
 </div>
 
 <h2>Parted Order History (TP1/TP2)</h2>
-<table><thead><tr>
+<div class="table-wrap"><table><thead><tr>
   <th>Time</th><th>Sym</th><th>Sig</th><th>Action</th><th>Entry</th><th>SL</th><th>TP</th><th>Lot</th><th>Status</th><th>Ticket</th>
-</tr></thead><tbody id="partedOrders"></tbody></table>
+</tr></thead><tbody id="partedOrders"></tbody></table></div>
 
 </div>
 
@@ -904,6 +1158,10 @@ tr:hover { background:#1e3a5f; }
     <button onclick="cancelGrid()" style="padding:8px;background:#dc2626;color:#fff;border:none;border-radius:4px;cursor:pointer">Cancel All</button>
   </div>
   <div id="gr_result" style="margin-top:12px;font-size:12px;color:#6ee7b7"></div>
+</div>
+<h2>Live XAUUSDc</h2>
+<div class="chart-container" style="height:140px;max-width:500px">
+  <canvas id="priceChartGrid"></canvas>
 </div>
 </div>
 
@@ -934,14 +1192,50 @@ tr:hover { background:#1e3a5f; }
 </div>
 
 <h2>Pending Orders</h2>
-<table><thead><tr>
+<div class="table-wrap"><table><thead><tr>
   <th>Ticket</th><th>Type</th><th>Vol</th><th>Price</th><th>SL</th><th>TP</th><th>Comment</th>
-</tr></thead><tbody id="pendingOrders"></tbody></table>
+</tr></thead><tbody id="pendingOrders"></tbody></table></div>
 
 <h2>Open Positions</h2>
-<table><thead><tr>
+<div class="table-wrap"><table><thead><tr>
   <th>Ticket</th><th>Type</th><th>Vol</th><th>Entry</th><th>Current</th><th>Profit</th><th>SL</th><th>TP</th><th>Action</th>
-</tr></thead><tbody id="managePositions"></tbody></table>
+</tr></thead><tbody id="managePositions"></tbody></table></div>
+
+</div>
+
+<div id="tab-scalping" style="display:none">
+
+<h2>Smart Scalping Engine</h2>
+<div class="grid" id="scalpingScoreBox"></div>
+<div class="grid" id="scalpingEngineBox"></div>
+
+<h2>Today's Performance</h2>
+<div class="grid" id="scalpingPerfBox"></div>
+
+<h2>Scalp Score</h2>
+<div class="grid" id="scalpingScoreDetail" style="grid-template-columns:repeat(auto-fit,minmax(100px,1fr))"></div>
+
+<h2>Trade History</h2>
+<div class="table-wrap"><table><thead><tr>
+  <th>Time</th><th>Ticket</th><th>Symbol</th><th>Profit</th><th>Comment</th>
+</tr></thead><tbody id="scalpingHistory"></tbody></table></div>
+
+</div>
+
+<div id="tab-intraday" style="display:none">
+
+<h2>Intraday Performance</h2>
+<div class="grid" id="intradaySummary"></div>
+
+<h2>Hourly P&L</h2>
+<div class="chart-container">
+  <canvas id="hourlyChart" height="120"></canvas>
+</div>
+
+<h2>Today's Trades</h2>
+<div class="table-wrap"><table><thead><tr>
+  <th>Time</th><th>Ticket</th><th>Symbol</th><th>Profit</th><th>Comment</th>
+</tr></thead><tbody id="intradayTrades"></tbody></table></div>
 
 </div>
 
@@ -959,9 +1253,9 @@ tr:hover { background:#1e3a5f; }
 <div class="grid" id="featureWeightsBox"></div>
 
 <h2>Learning Records</h2>
-<table><thead><tr>
+<div class="table-wrap"><table><thead><tr>
   <th>ID</th><th>Signal</th><th>Conf</th><th>Entry</th><th>Exit</th><th>Profit</th><th>Status</th><th>Time</th>
-</tr></thead><tbody id="learningRecords"></tbody></table>
+</tr></thead><tbody id="learningRecords"></tbody></table></div>
 
 </div>
 
@@ -970,11 +1264,20 @@ let charts = {};
 let analyticsLoaded = false;
 let learningLoaded = false;
 
+function toggleSidebar() {
+  const m = document.getElementById('mobileMenu');
+  if (m) { m.classList.toggle('open'); }
+}
+function closeSidebar() {
+  const m = document.getElementById('mobileMenu');
+  if (m) { m.classList.remove('open'); }
+}
 function switchTab(name, el) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.sidebar-item').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('[id^="tab-"]').forEach(t => t.style.display = 'none');
   document.getElementById('tab-' + name).style.display = 'block';
   (el || event.target).classList.add('active');
+  if (window.innerWidth <= 600) { closeSidebar(); }
   if (name === 'analytics' && !analyticsLoaded) {
     analyticsLoaded = true;
     fetchAnalytics();
@@ -987,15 +1290,58 @@ function switchTab(name, el) {
     fetchManagePositions();
     fetchAutoTradeMonitor();
     loadAutoTradeEnabled();
+    fetchPriceChart('priceChartGrid');
   }
   if (name === 'learning' && !learningLoaded) {
     learningLoaded = true;
     fetchLearningRecords();
   }
+  if (name === 'scalping') {
+    fetchScalping();
+  }
+  if (name === 'intraday') {
+    fetchIntraday();
+  }
 }
 
 function destroyChart(name) {
   if (charts[name]) { charts[name].destroy(); delete charts[name]; }
+}
+
+let priceChartInst = null;
+
+async function fetchPriceChart(canvasId) {
+  try {
+    const pc = await fetchJson('/api/chart/candles', {candles:[]});
+    if (!pc.candles || !pc.candles.length) return;
+    const labels = pc.candles.map(c => c.time);
+    const prices = pc.candles.map(c => c.close);
+    if (priceChartInst) priceChartInst.destroy();
+    const ctx = document.getElementById(canvasId)?.getContext('2d');
+    if (!ctx) return;
+    priceChartInst = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'XAUUSDc',
+          data: prices,
+          borderColor: prices[0] <= prices[prices.length-1] ? '#6ee7b7' : '#fca5a5',
+          borderWidth: 2,
+          fill: { target: 'origin', above: prices[0] <= prices[prices.length-1] ? 'rgba(110,231,183,0.08)' : 'rgba(252,165,165,0.08)' },
+          pointRadius: 0, tension: 0.2,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color:'#64748b', font:{size:9}, maxTicksLimit:12 }, grid: { color:'#1e293b' } },
+          y: { ticks: { color:'#94a3b8', font:{size:10} }, grid: { color:'#334155' } }
+        }
+      }
+    });
+  } catch(e) { console.error('Price chart error:', e); }
 }
 
 function makeChart(id, type, labels, datasets, opts) {
@@ -1031,6 +1377,19 @@ async function fetchJson(url, fallback, timeoutMs=8000) {
   }
 }
 
+async function fetchPublicUrl() {
+  try {
+    const d = await fetchJson('/api/dashboard-url', {url:'http://127.0.0.1:8000'});
+    document.getElementById('publicUrl').textContent = d.url.replace(/^https?:\/\//,'');
+  } catch(e) {}
+}
+function copyUrl() {
+  const txt = document.getElementById('publicUrl').textContent;
+  if (txt && txt !== 'tunnel...') {
+    navigator.clipboard.writeText('https://'+txt);
+    showNotif('URL copied!','#3b82f6');
+  }
+}
 async function fetchData() {
   try {
     const overview = await fetchJson('/api/overview', {balance:0,equity:0,floating_pl:0,drawdown:0,trades_today:0,open_count:0,open_positions:[],trades:[],equity_snapshots:[],learning:{total:0,win:0,loss:0,win_rate:0},scalping:null,server_time:'loading...'});
@@ -1322,6 +1681,99 @@ async function fetchAutoTradeMonitor() {
 }
 
 // =====================================
+// Scalping
+// =====================================
+
+async function fetchScalping() {
+  try {
+    const d = await fetchJson('/api/scalping', {performance:{},history:[],scalp_score:{}});
+    const p = d.performance || {};
+
+    const def = (v,fallback) => v!=null && v!==undefined ? v : fallback;
+    document.getElementById('scalpingPerfBox').innerHTML = [
+      {l:'Trades Today', v:def(p.trades,0)},
+      {l:'Win Rate', v:def(p.wr,0)+'%'},
+      {l:'Profit P&L', v:'<span class="'+(def(p.profit,0)>=0?'green':'red')+'">'+(def(p.profit,0)>=0?'+':'')+def(p.profit,0).toFixed(2)+'</span>'},
+      {l:'Wins', v:'<span class=green>'+def(p.wins,0)+'</span>'},
+      {l:'Losses', v:'<span class=red>'+def(p.losses,0)+'</span>'},
+      {l:'BE', v:def(p.be,0)},
+      {l:'Avg Win', v:'<span class=green>+'+def(p.avg_win,'0.00')+'</span>'},
+      {l:'Avg Loss', v:'<span class=red>'+def(p.avg_loss,'0.00')+'</span>'},
+      {l:'Best', v:'<span class=green>+'+def(p.best,'0.00')+'</span>'},
+      {l:'Worst', v:'<span class=red>'+def(p.worst,'0.00')+'</span>'},
+    ].map(x => '<div class="card"><div class="lbl">'+x.l+'</div><div class="val">'+x.v+'</div></div>').join('');
+
+    const ss = d.scalp_score || {};
+    const details = ss.details || {};
+    const detailKeys = Object.keys(details);
+    if (detailKeys.length) {
+      document.getElementById('scalpingScoreDetail').innerHTML = detailKeys.map(k =>
+        '<div class="card"><div class="lbl">'+k.replace(/_/g,' ')+'</div><div class="val">'+details[k]+'</div></div>'
+      ).join('');
+    }
+
+    const hist = d.history || [];
+    document.getElementById('scalpingHistory').innerHTML = hist.length
+      ? hist.map(t => '<tr><td>'+t.time+'</td><td>'+t.ticket+'</td><td>'+t.symbol+'</td><td class="'+(t.profit>=0?'green':'red')+'">'+(t.profit>=0?'+':'')+t.profit+'</td><td style="color:#64748b;font-size:11px">'+(t.comment||'-')+'</td></tr>').join('')
+      : '<tr><td colspan="5" style="text-align:center;color:#64748b">Tidak ada history</td></tr>';
+  } catch(e) { console.error('Scalping error:', e); }
+}
+
+// Intraday
+// =====================================
+
+let hourlyChart = null;
+
+async function fetchIntraday() {
+  try {
+    const d = await fetchJson('/api/intraday', {today:{},hourly:{},recent:[],account:{}});
+    const t = d.today || {};
+    document.getElementById('intradaySummary').innerHTML = [
+      {l:'Balance', v:d.account?.balance?.toFixed(2)||'-'},
+      {l:'Equity', v:d.account?.equity?.toFixed(2)||'-'},
+      {l:'Trades Today', v:t.trades||0},
+      {l:'Win Rate', v:(t.wr||0)+'%'},
+      {l:'Wins', v:'<span class=green>'+t.wins+'</span>'},
+      {l:'Losses', v:'<span class=red>'+t.losses+'</span>'},
+      {l:'BE', v:t.be||0},
+      {l:'P&L', v:'<span class="'+(t.profit>=0?'green':'red')+'">'+(t.profit>=0?'+':'')+t.profit+'</span>'},
+    ].map(x => '<div class="card"><div class="lbl">'+x.l+'</div><div class="val">'+x.v+'</div></div>').join('');
+
+    const hourly = d.hourly || {};
+    const hLabels = Object.keys(hourly).sort();
+    const hData = hLabels.map(k => hourly[k]);
+    if (hourlyChart) hourlyChart.destroy();
+    const ctx = document.getElementById('hourlyChart')?.getContext('2d');
+    if (ctx) {
+      hourlyChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: hLabels,
+          datasets: [{
+            label: 'Profit',
+            data: hData,
+            backgroundColor: hData.map(v => v >= 0 ? 'rgba(59,130,246,0.7)' : 'rgba(239,68,68,0.7)'),
+            borderColor: hData.map(v => v >= 0 ? '#3b82f6' : '#ef4444'),
+            borderWidth: 1,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: { y: { ticks: { color:'#94a3b8',font:{size:10} } } }
+        }
+      });
+    }
+
+    const trades = d.recent || [];
+    document.getElementById('intradayTrades').innerHTML = trades.length
+      ? trades.map(t => '<tr><td>'+t.time+'</td><td>'+t.ticket+'</td><td>'+t.symbol+'</td><td class="'+(t.profit>=0?'green':'red')+'">'+(t.profit>=0?'+':'')+t.profit+'</td><td style="color:#64748b;font-size:11px">'+(t.comment||'-')+'</td></tr>').join('')
+      : '<tr><td colspan="5" style="text-align:center;color:#64748b">Tidak ada trade hari ini</td></tr>';
+  } catch(e) { console.error('Intraday error:', e); }
+}
+
+// =====================================
 // Grid & Pending Orders
 // =====================================
 
@@ -1464,8 +1916,10 @@ async function fetchLearningRecords() {
 }
 
 fetchData();
+fetchPublicUrl();
 loadAutoTradeEnabled();
 setInterval(fetchData, 15000);
+setInterval(fetchPublicUrl, 30000);
 setInterval(() => { if (analyticsLoaded && document.getElementById('tab-analytics').style.display !== 'none') fetchAnalytics(); }, 30000);
 setInterval(() => { if (learningLoaded && document.getElementById('tab-learning').style.display !== 'none') fetchLearningRecords(); }, 45000);
 
@@ -1477,6 +1931,29 @@ setInterval(() => {
     fetchAutoTradeMonitor();
   }
 }, 1000);
+
+// Price chart refresh every 15 detik (di grid tab)
+setInterval(() => {
+  if (document.getElementById('tab-grid') && document.getElementById('tab-grid').style.display !== 'none') {
+    fetchPriceChart('priceChartGrid');
+  }
+}, 15000);
+
+// Scalping auto-refresh every 15 detik
+setInterval(() => {
+  if (document.getElementById('tab-scalping') && document.getElementById('tab-scalping').style.display !== 'none') {
+    fetchScalping();
+  }
+}, 15000);
+
+// Intraday auto-refresh every 15 detik
+setInterval(() => {
+  if (document.getElementById('tab-intraday') && document.getElementById('tab-intraday').style.display !== 'none') {
+    fetchIntraday();
+  }
+}, 15000);
 </script>
+</div>
+</div>
 </body>
 </html>"""

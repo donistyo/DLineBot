@@ -166,7 +166,7 @@ class LiveEngine:
             print("DailyMax : 15         -> 50")
 
             if mode == "scalp":
-                max_spread = 300
+                max_spread = 500
                 sl_points = 6
                 min_atr_val = 0.5
 
@@ -234,8 +234,8 @@ class LiveEngine:
             daily_max_profit = 300
 
         if BROKER == "exness" and mode == "scalp":
-            daily_max_trade = 50
-            daily_max_loss = -300
+            daily_max_trade = 100
+            daily_max_loss = -500
 
         self.break_even = BreakEvenManager(
             trigger_profit=be_trigger
@@ -253,6 +253,7 @@ class LiveEngine:
         if mode == "scalp":
             sp_levels = [
                 {"profit": 1,   "action": "BREAK_EVEN",      "label": "Break Even"},
+                {"profit": 3,   "action": "CLOSE",           "label": "Ambil Profit 3+"},
             ]
         else:
             sp_levels = None
@@ -301,7 +302,7 @@ class LiveEngine:
 
         self.smart_scalping = SmartScalpingEngine()
 
-        time_exit_minutes = 30 if BROKER == "exness" and mode == "scalp" else (120 if mode == "scalp" else 480)
+        time_exit_minutes = 9999
         self.time_exit = TimeExit(
             max_minutes=time_exit_minutes
         )
@@ -312,7 +313,7 @@ class LiveEngine:
         )
 
         self.emergency_exit = EmergencyExit(
-            max_loss_per_trade=9999,
+            max_loss_per_trade=20,
             max_daily_loss=9999,
             max_drawdown_pct=100,
             max_spread_mult=999
@@ -514,17 +515,8 @@ class LiveEngine:
 
             current_candle = last["time"]
 
-            if current_candle == self.last_candle_time:
-
-                print()
-                print("=" * 60)
-                print("SCHEDULER")
-                print("=" * 60)
-                print("Belum ada candle baru.")
-
-                return None
-
-            self.last_candle_time = current_candle
+            if current_candle != self.last_candle_time:
+                self.last_candle_time = current_candle
 
             # ===============================
             # Grid Management
@@ -861,6 +853,8 @@ class LiveEngine:
 
                 and decision["action"] != "NO_TRADE"
 
+                and not decision.get("manual", False)
+
                 and filter_result["allowed"]
 
                 and daily_result["allowed"]
@@ -883,12 +877,15 @@ class LiveEngine:
             if risk:
                 risk["lot_size"] = 0.01
                 risk["sl_points"] = 6.0
+                spread_price = float(last.get("spread", 0)) * 0.01
                 if decision["action"] == "BUY":
-                    risk["stop_loss"] = round(risk["entry_price"] - 6.0, 2)
-                    risk["take_profit"] = round(risk["entry_price"] + 4.0, 2)
+                    ask_price = risk["entry_price"] + spread_price / 2
+                    risk["stop_loss"] = 0.0
+                    risk["take_profit"] = 0.0
                 elif decision["action"] == "SELL":
-                    risk["stop_loss"] = round(risk["entry_price"] + 6.0, 2)
-                    risk["take_profit"] = round(risk["entry_price"] - 4.0, 2)
+                    bid_price = risk["entry_price"] - spread_price / 2
+                    risk["stop_loss"] = 0.0
+                    risk["take_profit"] = 0.0
 
             # ===============================
             # AI Trade Score
@@ -920,6 +917,16 @@ class LiveEngine:
                     "status": "BLOCKED",
 
                     "reason": "Auto-trade dimatikan dari dashboard."
+
+                }
+
+            elif decision.get("manual", False):
+
+                result = {
+
+                    "status": "BLOCKED",
+
+                    "reason": f"Manual: {decision.get('reason', 'berlawanan trend')}"
 
                 }
 

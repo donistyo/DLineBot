@@ -33,3 +33,11 @@ runtime/
 
 # Generated data
 learning_data/
+
+# ngrok binary
+ngrok/
+
+# Temp scripts
+check_*.py
+close_*.py
+start_tunnel.bat

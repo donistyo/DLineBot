@@ -338,12 +338,9 @@ class SmartScalpingEngine:
         curr_vol = volumes[-1] if volumes else 0
         avg_vol = np.mean(volumes[-5:-1]) if len(volumes) >= 5 else curr_vol
 
-        atr = float(last.get("ATR", 0))
-        spread = float(last.get("spread", 0))
-
         body_ratio = curr_body / max(avg_body, 0.01)
         vol_ratio = curr_vol / max(avg_vol, 0.01)
-        spread_ok = spread < atr * 0.3 if atr > 0 else True
+        spread_ok = True
 
         impulse = body_ratio >= 1.8 and vol_ratio >= 1.5 and spread_ok
         strength = int(min(100, max(45,

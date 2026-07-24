@@ -25,8 +25,12 @@ class EmergencyExit:
                     "ticket": ticket, "result": result, "emergency_type": "max_loss"}
 
         if account:
-            equity = account.equity
-            balance = account.balance
+            if isinstance(account, dict):
+                equity = account.get("equity", 0)
+                balance = account.get("balance", 0)
+            else:
+                equity = account.equity
+                balance = account.balance
             if equity > self._peak_balance:
                 self._peak_balance = equity
 

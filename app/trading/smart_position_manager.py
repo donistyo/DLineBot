@@ -120,6 +120,15 @@ class SmartPositionManager:
                             "closed_volume": close_volume
                         })
 
+                elif action == "CLOSE":
+                    resp = self.controller.close(position)
+                    done.add(action)
+                    results.append({
+                        "status": "CLOSED", "action": "CLOSE",
+                        "reason": f"Take Profit {label} (${profit:.2f})",
+                        "ticket": ticket, "result": resp
+                    })
+
                 elif action == "TRAIL_FINAL":
                     new_sl = self._trail_sl(position, level["distance"])
                     if new_sl and (position.sl == 0 or abs(new_sl - position.sl) > 0):
