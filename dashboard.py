@@ -1,6 +1,5 @@
 import uvicorn
 import socket
-import os
 import atexit
 import threading
 from pathlib import Path
@@ -9,7 +8,6 @@ from dotenv import load_dotenv, set_key
 load_dotenv()
 
 ENV_PATH = Path(".env")
-NGROK_BIN = Path("C:/Users/ADSS/AI-XAU-BOT/ngrok/ngrok.exe")
 
 _runner = None
 _runner_thread = None
@@ -46,38 +44,20 @@ def stop_engine():
     return False
 
 
-public_url = None
-
-
-def start_tunnel(port):
-    global public_url
-    try:
-        from pyngrok import ngrok, conf
-        conf.get_default().ngrok_path = str(NGROK_BIN)
-        tunnel = ngrok.connect(port, "http")
-        public_url = tunnel.public_url
-        print(f"Public: {public_url}")
-        set_key(ENV_PATH, "DASHBOARD_URL", public_url)
-        atexit.register(lambda: ngrok.kill())
-        return public_url
-    except Exception as e:
-        print(f"ngrok gagal: {e}")
-        return None
-
-
 if __name__ == "__main__":
     port = 8000
     local_ip = get_local_ip()
 
+    local_url = f"http://{local_ip}:{port}"
+
     print("=" * 60)
     print("DASHBOARD + LIVE ENGINE")
     print("=" * 60)
-    print(f"Local : http://{local_ip}:{port}")
+    print(f"Local : {local_url}")
+    print(f"Akses dari HP dalam jaringan: {local_url}")
+    print()
 
-    url = start_tunnel(port)
-    if not url:
-        print(f"HP    : http://{local_ip}:{port}")
-        set_key(ENV_PATH, "DASHBOARD_URL", f"http://{local_ip}:{port}")
+    set_key(ENV_PATH, "DASHBOARD_URL", local_url)
 
     start_engine()
     atexit.register(stop_engine)

@@ -1108,8 +1108,11 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 
 <div id="tab-manual" style="display:none">
 
+<div style="display:flex;gap:16px;flex-wrap:wrap">
+
+<div style="flex:1;min-width:320px;max-width:420px">
 <h2>Manual Order - SL, TP1, TP2</h2>
-<div style="background:#1e293b;border-radius:6px;padding:16px;max-width:500px">
+<div style="background:#1e293b;border-radius:6px;padding:16px">
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
     <div><label style="font-size:11px;color:#94a3b8">Symbol</label><br><input id="mo_symbol" value="XAUUSDc" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
     <div><label style="font-size:11px;color:#94a3b8">Signal</label><br>
@@ -1128,17 +1131,20 @@ tr:hover td { background:rgba(59,130,246,0.05); }
     <button onclick="sendManualOrder(false)" style="flex:1;padding:8px;background:#3b82f6;color:#fff;border:none;border-radius:4px;font-weight:600;cursor:pointer">KIRIM ORDER</button>
     <button onclick="sendManualOrder(true)" style="padding:8px;background:#334155;color:#94a3b8;border:none;border-radius:4px;cursor:pointer">Dry Run</button>
   </div>
-  <div id="mo_result" style="margin-top:12px;font-size:12px;color:#6ee7b7"></div>
+  <div id="mo_result" style="margin-top:12px;font-size:12px;color:#6ee7b7;word-break:break-all"></div>
+</div>
 </div>
 
-<div style="margin-top:16px">
-  <h2>Chart Harga</h2>
-  <div class="chart-container" style="height:200px;max-width:600px">
-    <canvas id="manualChart"></canvas>
-  </div>
+<div style="flex:1;min-width:320px">
+<h2>Chart Harga</h2>
+<div class="chart-container" style="height:220px">
+  <canvas id="manualChart"></canvas>
+</div>
 </div>
 
-<h2>Parted Order History (TP1/TP2)</h2>
+</div>
+
+<h2 style="margin-top:16px">Parted Order History (TP1/TP2)</h2>
 <div class="table-wrap"><table><thead><tr>
   <th>Time</th><th>Sym</th><th>Sig</th><th>Action</th><th>Entry</th><th>SL</th><th>TP</th><th>Lot</th><th>Status</th><th>Ticket</th>
 </tr></thead><tbody id="partedOrders"></tbody></table></div>
