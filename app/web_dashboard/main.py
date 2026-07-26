@@ -894,6 +894,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <title>DLine</title>
 <link rel="icon" href="/favicon" type="image/png">
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3"></script>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 body { font-family:'Inter','Segoe UI',sans-serif; background:linear-gradient(135deg,#0c1222 0%,#1a1a2e 50%,#16213e 100%); color:#e2e8f0; min-height:100vh; }
@@ -1130,6 +1131,13 @@ tr:hover td { background:rgba(59,130,246,0.05); }
   <div id="mo_result" style="margin-top:12px;font-size:12px;color:#6ee7b7"></div>
 </div>
 
+<div style="margin-top:16px">
+  <h2>Chart Harga</h2>
+  <div class="chart-container" style="height:200px;max-width:600px">
+    <canvas id="manualChart"></canvas>
+  </div>
+</div>
+
 <h2>Parted Order History (TP1/TP2)</h2>
 <div class="table-wrap"><table><thead><tr>
   <th>Time</th><th>Sym</th><th>Sig</th><th>Action</th><th>Entry</th><th>SL</th><th>TP</th><th>Lot</th><th>Status</th><th>Ticket</th>
@@ -1284,6 +1292,7 @@ function switchTab(name, el) {
   }
   if (name === 'manual') {
     fetchPartedOrders();
+    fetchManualChart();
   }
   if (name === 'grid') {
     fetchGridStatus();
@@ -1342,6 +1351,77 @@ async function fetchPriceChart(canvasId) {
       }
     });
   } catch(e) { console.error('Price chart error:', e); }
+}
+
+let manualChartInst = null;
+
+async function fetchManualChart(entryLine, slLine, tp1Line, tp2Line) {
+  try {
+    Chart.register(ChartAnnotation);
+    const pc = await fetchJson('/api/chart/candles', {candles:[]});
+    if (!pc.candles || !pc.candles.length) return;
+    const labels = pc.candles.map(c => c.time);
+    const prices = pc.candles.map(c => c.close);
+    if (manualChartInst) manualChartInst.destroy();
+    const ctx = document.getElementById('manualChart')?.getContext('2d');
+    if (!ctx) return;
+
+    const annotations = {};
+    if (entryLine) {
+      annotations.entry = {
+        type: 'line', yMin: entryLine, yMax: entryLine,
+        borderColor: '#3b82f6', borderWidth: 2, borderDash: [6,3],
+        label: { display: true, content: 'Entry ' + entryLine, position: 'start', backgroundColor: 'rgba(59,130,246,0.8)', font: {size:10}, color:'#fff', padding:4 }
+      };
+    }
+    if (slLine) {
+      annotations.sl = {
+        type: 'line', yMin: slLine, yMax: slLine,
+        borderColor: '#ef4444', borderWidth: 2, borderDash: [6,3],
+        label: { display: true, content: 'SL ' + slLine, position: 'start', backgroundColor: 'rgba(239,68,68,0.8)', font: {size:10}, color:'#fff', padding:4 }
+      };
+    }
+    if (tp1Line) {
+      annotations.tp1 = {
+        type: 'line', yMin: tp1Line, yMax: tp1Line,
+        borderColor: '#22c55e', borderWidth: 2, borderDash: [6,3],
+        label: { display: true, content: 'TP1 ' + tp1Line, position: 'end', backgroundColor: 'rgba(34,197,94,0.8)', font: {size:10}, color:'#fff', padding:4 }
+      };
+    }
+    if (tp2Line) {
+      annotations.tp2 = {
+        type: 'line', yMin: tp2Line, yMax: tp2Line,
+        borderColor: '#16a34a', borderWidth: 2, borderDash: [3,3],
+        label: { display: true, content: 'TP2 ' + tp2Line, position: 'end', backgroundColor: 'rgba(22,163,74,0.8)', font: {size:10}, color:'#fff', padding:4 }
+      };
+    }
+
+    manualChartInst = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'XAUUSDc',
+          data: prices,
+          borderColor: prices[0] <= prices[prices.length-1] ? '#6ee7b7' : '#fca5a5',
+          borderWidth: 2,
+          fill: { target: 'origin', above: prices[0] <= prices[prices.length-1] ? 'rgba(110,231,183,0.08)' : 'rgba(252,165,165,0.08)' },
+          pointRadius: 0, tension: 0.2,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          annotation: { annotations }
+        },
+        scales: {
+          x: { ticks: { color:'#64748b', font:{size:9}, maxTicksLimit:12 }, grid: { color:'#1e293b' } },
+          y: { ticks: { color:'#94a3b8', font:{size:10} }, grid: { color:'#334155' } }
+        }
+      }
+    });
+  } catch(e) { console.error('Manual chart error:', e); }
 }
 
 function makeChart(id, type, labels, datasets, opts) {
@@ -1884,6 +1964,11 @@ function sendManualOrder(dryRun) {
           el.innerHTML = 'ORDER SENT - Ticket: ' + t1 + ' / ' + t2;
         }
         fetchPartedOrders();
+        const entry = r.entry_price;
+        const sl = r.stop_loss;
+        const tp1 = r.take_profit1;
+        const tp2 = r.take_profit2;
+        fetchManualChart(entry, sl, tp1, tp2);
       } else {
         el.style.color = '#fca5a5';
         el.textContent = 'FAILED: ' + (data.error || 'Unknown error');
@@ -1936,6 +2021,13 @@ setInterval(() => {
 setInterval(() => {
   if (document.getElementById('tab-grid') && document.getElementById('tab-grid').style.display !== 'none') {
     fetchPriceChart('priceChartGrid');
+  }
+}, 15000);
+
+// Manual chart refresh every 15 detik
+setInterval(() => {
+  if (document.getElementById('tab-manual') && document.getElementById('tab-manual').style.display !== 'none') {
+    fetchManualChart();
   }
 }, 15000);
 
