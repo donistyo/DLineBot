@@ -652,14 +652,6 @@ def api_intraday():
 
 @app.get("/api/scalping")
 def api_scalping():
-    today_start = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-    to_date = int(datetime.now().timestamp())
-    try:
-        MT5Session.connect()
-        deals = mt5.history_deals_get(today_start, to_date)
-    except:
-        deals = None
-
     data = {
         "performance": {"trades": 0, "profit": 0.0, "wins": 0, "losses": 0, "be": 0, "wr": 0, "avg_win": 0, "avg_loss": 0, "best": 0, "worst": 0},
         "history": [],
@@ -674,37 +666,42 @@ def api_scalping():
     except:
         pass
 
-    if deals:
-        profits = [d.profit for d in deals]
-        total = sum(profits)
-        wins = [p for p in profits if p > 0]
-        losses = [p for p in profits if p < 0]
-        be = sum(1 for p in profits if p == 0)
-        n = len(deals)
+    try:
+        with open("runtime/overview.json") as f:
+            ov = json.load(f)
+            trades_list = ov.get("trades", [])
+            if trades_list:
+                profits = [t.get("profit") or 0 for t in trades_list if t.get("status") == "SUCCESS"]
+                if profits:
+                    total = sum(profits)
+                    wins = [p for p in profits if p > 0]
+                    losses = [p for p in profits if p < 0]
+                    be = sum(1 for p in profits if p == 0)
+                    n = len(profits)
+                    data["performance"] = {
+                        "trades": n,
+                        "profit": round(total, 2),
+                        "wins": len(wins),
+                        "losses": len(losses),
+                        "be": be,
+                        "wr": round(len(wins) / n * 100, 1) if n else 0,
+                        "avg_win": round(sum(wins) / len(wins), 2) if wins else 0,
+                        "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0,
+                        "best": round(max(wins), 2) if wins else 0,
+                        "worst": round(min(losses), 2) if losses else 0,
+                    }
 
-        data["performance"] = {
-            "trades": n,
-            "profit": round(total, 2),
-            "wins": len(wins),
-            "losses": len(losses),
-            "be": be,
-            "wr": round(len(wins) / n * 100, 1) if n else 0,
-            "avg_win": round(sum(wins) / len(wins), 2) if wins else 0,
-            "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0,
-            "best": round(max(wins), 2) if wins else 0,
-            "worst": round(min(losses), 2) if losses else 0,
-        }
-
-        for d in sorted(deals, key=lambda x: x.time, reverse=True)[:50]:
-            dt = datetime.fromtimestamp(d.time)
-            data["history"].append({
-                "ticket": d.ticket,
-                "symbol": d.symbol,
-                "profit": round(d.profit, 2),
-                "time": dt.strftime("%H:%M"),
-                "magic": d.magic,
-                "comment": d.comment or "",
-            })
+                for t in trades_list[:50]:
+                    data["history"].append({
+                        "ticket": t.get("ticket", t.get("id", "")),
+                        "symbol": t.get("symbol", "XAUUSDc"),
+                        "profit": round(t.get("profit") or 0, 2),
+                        "time": t.get("time", "")[-5:] if t.get("time") else "",
+                        "magic": t.get("magic", 0),
+                        "comment": t.get("reason") or t.get("status", ""),
+                    })
+    except:
+        pass
 
     return data
 
