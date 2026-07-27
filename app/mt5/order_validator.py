@@ -14,11 +14,11 @@ class OrderValidator:
         if order["price"] <= 0:
             errors.append("Harga tidak valid.")
 
-        if order["sl"] <= 0:
-            errors.append("Stop Loss tidak valid.")
+        if order["sl"] is not None and order["sl"] < 0:
+            errors.append("Stop Loss tidak valid (negatif).")
 
-        if order["tp"] <= 0:
-            errors.append("Take Profit tidak valid.")
+        if order["tp"] is not None and order["tp"] < 0:
+            errors.append("Take Profit tidak valid (negatif).")
 
         if order["symbol"] == "":
             errors.append("Symbol kosong.")
