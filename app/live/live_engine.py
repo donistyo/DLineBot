@@ -236,7 +236,7 @@ class LiveEngine:
             daily_max_profit = 300
 
         if BROKER == "exness" and mode == "scalp":
-            daily_max_trade = 100
+            daily_max_trade = 50
             daily_max_loss = -500
 
         self.break_even = BreakEvenManager(
