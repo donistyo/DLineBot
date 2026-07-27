@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from app.mt5.position_controller import PositionController
+from app.mt5.position_controller import PositionController, _log_close
 
 
 class TimeExit:
@@ -26,6 +26,7 @@ class TimeExit:
         elapsed = (datetime.now() - entry_time).total_seconds() / 60
 
         if elapsed >= self.max_minutes:
+            _log_close("TIME_EXIT", position.ticket, position.symbol, position.profit)
             result = self.controller.close(position)
             self._entry_times.pop(ticket, None)
             return {"status": "CLOSED", "action": "TIME_EXIT",

@@ -1,4 +1,4 @@
-from app.mt5.position_controller import PositionController
+from app.mt5.position_controller import PositionController, _log_close
 
 
 class AIExit:
@@ -30,6 +30,7 @@ class AIExit:
                         "reason": f"AI reversal {reversal_count}x tapi posisi loss, tunggu profit.",
                         "ticket": ticket, "confidence": confidence,
                         "reversal_count": reversal_count}
+            _log_close("AI_EXIT(reversal)", ticket, position.symbol, position.profit)
             result = self.controller.close(position)
             self._consecutive_reversals.pop(ticket, None)
             return {"status": "CLOSED", "action": "AI_EXIT",
@@ -43,6 +44,7 @@ class AIExit:
                         "reason": f"High confidence reversal ({confidence:.0%}) tapi loss, tunggu profit.",
                         "ticket": ticket, "confidence": confidence,
                         "reversal_count": reversal_count}
+            _log_close("AI_EXIT(high_conf)", ticket, position.symbol, position.profit)
             result = self.controller.close(position)
             self._consecutive_reversals.pop(ticket, None)
             return {"status": "CLOSED", "action": "AI_EXIT",

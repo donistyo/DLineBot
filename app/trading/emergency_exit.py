@@ -1,4 +1,4 @@
-from app.mt5.position_controller import PositionController
+from app.mt5.position_controller import PositionController, _log_close
 
 
 class EmergencyExit:
@@ -19,6 +19,7 @@ class EmergencyExit:
         reasons = []
 
         if profit < 0 and abs(profit) >= self.max_loss_per_trade:
+            _log_close("EMERGENCY_EXIT(max_loss)", position.ticket, position.symbol, position.profit)
             result = self.controller.close(position)
             return {"status": "CLOSED", "action": "EMERGENCY",
                     "reason": f"Max loss per trade (${abs(profit):.0f}/${self.max_loss_per_trade}).",
@@ -39,6 +40,7 @@ class EmergencyExit:
                 dd_pct = (self._peak_balance - equity) / self._peak_balance * 100
 
             if dd_pct >= self.max_drawdown_pct:
+                _log_close("EMERGENCY_EXIT(drawdown)", ticket, position.symbol, profit)
                 result = self.controller.close(position)
                 return {"status": "CLOSED", "action": "EMERGENCY",
                         "reason": f"Max drawdown ({dd_pct:.1f}%/{self.max_drawdown_pct}%).",
@@ -49,6 +51,7 @@ class EmergencyExit:
                 spread = float(market.get("spread", 0))
                 atr = float(market.get("ATR", 1))
                 if atr > 0 and spread > atr * self.max_spread_mult:
+                    _log_close("EMERGENCY_EXIT(spread)", ticket, position.symbol, profit)
                     result = self.controller.close(position)
                     return {"status": "CLOSED", "action": "EMERGENCY",
                             "reason": f"Spread membengkak ({spread:.0f} > {atr:.0f}x{self.max_spread_mult}).",

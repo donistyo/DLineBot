@@ -1,6 +1,23 @@
+import traceback
+import datetime
 import MetaTrader5 as mt5
 
 from app.mt5.session import MT5Session
+
+
+CLOSE_LOG = "runtime/close_trace.log"
+
+
+def _log_close(caller, ticket, symbol, profit):
+    try:
+        now = datetime.datetime.now().strftime("%H:%M:%S")
+        stack = traceback.format_stack()[:-1]
+        with open(CLOSE_LOG, "a") as f:
+            f.write(f"\n[{now}] CLOSE by {caller} | ticket={ticket} {symbol} profit={profit}\n")
+            for line in stack:
+                f.write(line)
+    except:
+        pass
 
 
 class PositionController:
@@ -14,6 +31,29 @@ class PositionController:
     # ======================================
 
     def close(self, position):
+        _log_close("POSITION_CONTROLLER", position.ticket, position.symbol, position.profit)
+        import sys
+        stack = traceback.format_stack()[:-1]
+        caller = "UNKNOWN"
+        for line in stack:
+            if "EMERGENCY_EXIT" in line:
+                caller = "EMERGENCY_EXIT"; break
+            if "AI_EXIT" in line:
+                caller = "AI_EXIT"; break
+            if "EXIT_MANAGER" in line:
+                caller = "EXIT_MANAGER"; break
+            if "SMART_POSITION" in line:
+                caller = "SMART_POSITION"; break
+            if "TIME_EXIT" in line:
+                caller = "TIME_EXIT"; break
+            if "CLOSE_PARTIAL" in line:
+                caller = "CLOSE_PARTIAL"; break
+            if "DASHBOARD_MANUAL" in line:
+                caller = "DASHBOARD_MANUAL"; break
+            if "close_all" in line or "close_pos1" in line:
+                caller = "SCRIPT"; break
+        with open("runtime/close_trace.log", "a") as f:
+            f.write(f"CALLER={caller}\n")
 
         tick = mt5.symbol_info_tick(position.symbol)
 
@@ -77,6 +117,7 @@ class PositionController:
     # ======================================
 
     def close_partial(self, position, volume):
+        _log_close("CLOSE_PARTIAL", position.ticket, position.symbol, position.profit)
 
         tick = mt5.symbol_info_tick(position.symbol)
 

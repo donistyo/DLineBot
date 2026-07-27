@@ -1,4 +1,4 @@
-from app.mt5.position_controller import PositionController
+from app.mt5.position_controller import PositionController, _log_close
 
 
 class ExitManager:
@@ -67,6 +67,7 @@ class ExitManager:
 
             }
 
+        _log_close("EXIT_MANAGER(sinyal_flip)", position.ticket, position.symbol, position.profit)
         result = self.controller.close(position)
 
         return {

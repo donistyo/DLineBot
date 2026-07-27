@@ -851,6 +851,8 @@ def api_position_close(data: dict):
         return {"success": False, "error": "Gagal ambil posisi"}
 
     controller = PositionController()
+    from app.mt5.position_controller import _log_close
+    _log_close("DASHBOARD_MANUAL", position.ticket, position.symbol, position.profit)
     result = controller.close(position)
     return {"success": True, "result": result}
 

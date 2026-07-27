@@ -1,4 +1,4 @@
-from app.mt5.position_controller import PositionController
+from app.mt5.position_controller import PositionController, _log_close
 from app.mt5.history_manager import HistoryManager
 
 
@@ -121,6 +121,7 @@ class SmartPositionManager:
                         })
 
                 elif action == "CLOSE":
+                    _log_close("SMART_POSITION(TP)", position.ticket, position.symbol, position.profit)
                     resp = self.controller.close(position)
                     done.add(action)
                     results.append({
