@@ -53,6 +53,20 @@ class ExitManager:
 
             }
 
+        if position.profit <= 0:
+
+            return {
+
+                "status": "HOLD",
+
+                "action": "NONE",
+
+                "reason": "Sinyal berlawanan tapi posisi masih loss, tunggu profit dulu.",
+
+                "ticket": position.ticket
+
+            }
+
         result = self.controller.close(position)
 
         return {
