@@ -25,6 +25,11 @@ class AIExit:
         self._consecutive_reversals[ticket] = reversal_count
 
         if reversal_count >= self.lookback:
+            if position.profit <= 0:
+                return {"status": "HOLD", "action": "WATCH",
+                        "reason": f"AI reversal {reversal_count}x tapi posisi loss, tunggu profit.",
+                        "ticket": ticket, "confidence": confidence,
+                        "reversal_count": reversal_count}
             result = self.controller.close(position)
             self._consecutive_reversals.pop(ticket, None)
             return {"status": "CLOSED", "action": "AI_EXIT",
@@ -33,6 +38,11 @@ class AIExit:
                     "reversal_count": reversal_count}
 
         if confidence >= self.min_exit_confidence:
+            if position.profit <= 0:
+                return {"status": "HOLD", "action": "WATCH",
+                        "reason": f"High confidence reversal ({confidence:.0%}) tapi loss, tunggu profit.",
+                        "ticket": ticket, "confidence": confidence,
+                        "reversal_count": reversal_count}
             result = self.controller.close(position)
             self._consecutive_reversals.pop(ticket, None)
             return {"status": "CLOSED", "action": "AI_EXIT",
