@@ -100,12 +100,14 @@ class AutoTrader:
         # ======================================
 
         result = self.order_sender.send(request)
+        success = isinstance(result, dict) and result.get("success", False)
 
         return {
 
-            "status": "SUCCESS" if result else "FAILED",
+            "status": "SUCCESS" if success else "FAILED",
 
-            "result": result
+            "result": result,
+            "reason": "" if success else str(result.get("errors", result))
 
         }
 
