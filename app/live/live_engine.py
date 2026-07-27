@@ -1158,6 +1158,22 @@ class LiveEngine:
             _loss = sum(1 for t in _trades_list if t.get("profit") and t["profit"] < 0)
             _total_trades_db = len(_trades_list)
 
+            _today_deals = []
+            try:
+                for d in self.history_manager.today():
+                    _today_deals.append({
+                        "ticket": d.ticket,
+                        "symbol": d.symbol,
+                        "profit": round(d.profit, 2),
+                        "time": str(datetime.fromtimestamp(d.time).strftime("%H:%M")),
+                        "type": "BUY" if d.type == 0 else "SELL",
+                        "volume": d.volume,
+                        "price": d.price,
+                        "comment": d.comment or "",
+                    })
+            except:
+                pass
+
             overview = {
                 "balance": account.get("balance", 0) if account else 0,
                 "equity": account.get("equity", 0) if account else 0,
@@ -1178,6 +1194,7 @@ class LiveEngine:
                 "trades_today": performance.get("total_trade", 0),
                 "profit_today": round(performance.get("net_profit", 0), 2),
                 "trades": _trades_list,
+                "today_deals": _today_deals,
                 "equity_snapshots": _equity_list,
                 "learning": {"total": lr_stats['total'], "win": lr_stats.get('win', _win),
                             "loss": lr_stats.get('loss', _loss), "win_rate": lr_stats['win_rate']},

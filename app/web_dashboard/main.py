@@ -669,33 +669,45 @@ def api_scalping():
     try:
         with open("runtime/overview.json") as f:
             ov = json.load(f)
-            trades_list = ov.get("trades", [])
-            if trades_list:
-                profits = [t.get("profit") or 0 for t in trades_list if t.get("status") == "SUCCESS"]
-                if profits:
-                    total = sum(profits)
-                    wins = [p for p in profits if p > 0]
-                    losses = [p for p in profits if p < 0]
-                    be = sum(1 for p in profits if p == 0)
-                    n = len(profits)
-                    data["performance"] = {
-                        "trades": n,
-                        "profit": round(total, 2),
-                        "wins": len(wins),
-                        "losses": len(losses),
-                        "be": be,
-                        "wr": round(len(wins) / n * 100, 1) if n else 0,
-                        "avg_win": round(sum(wins) / len(wins), 2) if wins else 0,
-                        "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0,
-                        "best": round(max(wins), 2) if wins else 0,
-                        "worst": round(min(losses), 2) if losses else 0,
-                    }
+            trades_today = ov.get("trades_today", 0)
+            profit_today = ov.get("profit_today", 0.0)
+            data["performance"]["trades"] = trades_today
+            data["performance"]["profit"] = round(profit_today, 2)
 
-                for t in trades_list[:50]:
+            today_deals = ov.get("today_deals", [])
+            if today_deals:
+                profits = [d["profit"] for d in today_deals]
+                n = len(profits)
+                wins_list = [p for p in profits if p > 0]
+                losses_list = [p for p in profits if p < 0]
+                be_list = sum(1 for p in profits if p == 0)
+                data["performance"].update({
+                    "wins": len(wins_list),
+                    "losses": len(losses_list),
+                    "be": be_list,
+                    "wr": round(len(wins_list) / n * 100, 1) if n else 0,
+                    "avg_win": round(sum(wins_list) / len(wins_list), 2) if wins_list else 0,
+                    "avg_loss": round(sum(losses_list) / len(losses_list), 2) if losses_list else 0,
+                    "best": round(max(wins_list), 2) if wins_list else 0,
+                    "worst": round(min(losses_list), 2) if losses_list else 0,
+                })
+                for d in reversed(today_deals):
                     data["history"].append({
-                        "ticket": t.get("ticket", t.get("id", "")),
+                        "ticket": d.get("ticket", ""),
+                        "symbol": d.get("symbol", "XAUUSDc"),
+                        "profit": d.get("profit"),
+                        "time": d.get("time", ""),
+                        "magic": 0,
+                        "comment": d.get("comment", ""),
+                    })
+            else:
+                trades_list = ov.get("trades", [])
+                for t in trades_list[:50]:
+                    p = t.get("profit")
+                    data["history"].append({
+                        "ticket": t.get("id", ""),
                         "symbol": t.get("symbol", "XAUUSDc"),
-                        "profit": round(t.get("profit") or 0, 2),
+                        "profit": round(p, 2) if p is not None else None,
                         "time": t.get("time", "")[-5:] if t.get("time") else "",
                         "magic": t.get("magic", 0),
                         "comment": t.get("reason") or t.get("status", ""),
@@ -1795,9 +1807,13 @@ async function fetchScalping() {
       ).join('');
     }
 
+    const fmtPnl = (p) => {
+      if (p === null || p === undefined) return '<span style="color:#64748b">-</span>';
+      return '<span class="'+(p>=0?'green':'red')+'">'+(p>=0?'+':'')+p.toFixed(2)+'</span>';
+    };
     const hist = d.history || [];
     document.getElementById('scalpingHistory').innerHTML = hist.length
-      ? hist.map(t => '<tr><td>'+t.time+'</td><td>'+t.ticket+'</td><td>'+t.symbol+'</td><td class="'+(t.profit>=0?'green':'red')+'">'+(t.profit>=0?'+':'')+t.profit+'</td><td style="color:#64748b;font-size:11px">'+(t.comment||'-')+'</td></tr>').join('')
+      ? hist.map(t => '<tr><td>'+t.time+'</td><td>'+t.ticket+'</td><td>'+t.symbol+'</td><td>'+fmtPnl(t.profit)+'</td><td style="color:#64748b;font-size:11px">'+(t.comment||'-')+'</td></tr>').join('')
       : '<tr><td colspan="5" style="text-align:center;color:#64748b">Tidak ada history</td></tr>';
   } catch(e) { console.error('Scalping error:', e); }
 }

@@ -1,6 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
+import MetaTrader5 as mt5
 
 from app.config.features import FEATURE_COLUMNS
 from app.database.session import db_session
@@ -78,7 +79,19 @@ class LearningManager:
             position_id = getattr(exit_deal, "position_id", None)
             if position_id is None:
                 return None
-            return position_id
+
+            with db_session() as db:
+                trade = db.query(TradeLog).filter_by(ticket=position_id).first()
+                if trade:
+                    return position_id
+
+            deals = mt5.history_deals_get(position=position_id)
+            if deals:
+                for d in deals:
+                    if d.entry == 0:
+                        return d.ticket
+
+            return None
         except Exception:
             return None
 
