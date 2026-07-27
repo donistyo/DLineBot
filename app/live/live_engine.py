@@ -197,7 +197,9 @@ class LiveEngine:
 
         self.trade_filter = TradeFilter(
             max_spread=max_spread,
-            min_atr=min_atr_val
+            min_atr=min_atr_val,
+            start_hour=0,
+            end_hour=23
         )
 
         self.position_filter = PositionFilter()
