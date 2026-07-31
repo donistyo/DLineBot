@@ -16,12 +16,14 @@ class SmartPositionManager:
         self._recent_closes = []
 
         self.levels = levels or [
-            {"profit": 3,   "action": "BREAK_EVEN",      "label": "Break Even"},
-            {"profit": 6,   "action": "TRAIL_LOOSE",      "label": "Trailing Start",   "distance": 3},
-            {"profit": 10,  "action": "TRAIL_TIGHT",      "label": "Trailing Rapat",   "distance": 2},
-            {"profit": 20,  "action": "LOCK_PROFIT",      "label": "Lock Profit +10",  "lock_at": 10},
-            {"profit": 40,  "action": "SCALE_OUT",        "label": "Scale Out 50%",    "close_pct": 50},
-            {"profit": 60,  "action": "TRAIL_FINAL",      "label": "Trailing Final",   "distance": 1},
+            {"profit": 4.5, "action": "SCALE_OUT",       "label": "Close 70%",       "close_pct": 70},
+            {"profit": 9,   "action": "BREAK_EVEN",      "label": "Break Even"},
+            {"profit": 13.5,"action": "CLOSE",            "label": "Close Sisa"},
+            {"profit": 18,  "action": "TRAIL_LOOSE",      "label": "Trailing Start",   "distance": 9},
+            {"profit": 30,  "action": "TRAIL_TIGHT",      "label": "Trailing Rapat",   "distance": 6},
+            {"profit": 60,  "action": "LOCK_PROFIT",      "label": "Lock Profit +30",  "lock_at": 30},
+            {"profit": 120, "action": "SCALE_OUT",        "label": "Scale Out 50%",    "close_pct": 50},
+            {"profit": 180, "action": "TRAIL_FINAL",      "label": "Trailing Final",   "distance": 3},
         ]
 
     def process(self, position, prediction=None, regime=None, last=None):

@@ -30,8 +30,13 @@ class PartedOrder:
         return info
 
     def _split_volume(self, volume):
+        min_lot = 0.01
         half = round(volume / 2, 2)
-        return half, round(volume - half, 2)
+        vol1 = half
+        vol2 = round(volume - half, 2)
+        if vol1 < min_lot or vol2 < min_lot:
+            return round(volume, 2), 0.0
+        return vol1, vol2
 
     def execute(
         self,
@@ -112,13 +117,18 @@ class PartedOrder:
         else:
             if signal == "BUY":
                 req1 = OrderBuilder.buy(symbol, vol1, exec_price, stop_loss, take_profit1, magic, comment)
-                req2 = OrderBuilder.buy(symbol, vol2, exec_price, stop_loss, take_profit2, magic, comment)
             else:
                 req1 = OrderBuilder.sell(symbol, vol1, exec_price, stop_loss, take_profit1, magic, comment)
-                req2 = OrderBuilder.sell(symbol, vol2, exec_price, stop_loss, take_profit2, magic, comment)
-
             result1 = self.sender.send(req1)
-            result2 = self.sender.send(req2)
+
+            if vol2 > 0:
+                if signal == "BUY":
+                    req2 = OrderBuilder.buy(symbol, vol2, exec_price, stop_loss, take_profit2, magic, comment)
+                else:
+                    req2 = OrderBuilder.sell(symbol, vol2, exec_price, stop_loss, take_profit2, magic, comment)
+                result2 = self.sender.send(req2)
+            else:
+                result2 = {"success": True, "skipped": True, "reason": "Volume terlalu kecil untuk di-split"}
 
         self._log_result(symbol, signal, volume, entry_price, stop_loss,
                          take_profit1, take_profit2, vol1, vol2, result1, result2)
@@ -149,7 +159,10 @@ class PartedOrder:
         if not result1.get("success"):
             status1 = "FAILED"
             reason1 = str(result1.get("errors", result1.get("error", "")))
-        if not result2.get("success"):
+        if result2.get("skipped"):
+            status2 = "SKIPPED"
+            reason2 = result2.get("reason", "")
+        elif not result2.get("success"):
             status2 = "FAILED"
             reason2 = str(result2.get("errors", result2.get("error", "")))
 
@@ -212,8 +225,11 @@ class PartedOrder:
 
             ok1 = p.get("result_1", {}).get("success", False)
             ok2 = p.get("result_2", {}).get("success", False)
+            skip2 = p.get("result_2", {}).get("skipped", False)
             if ok1 and ok2:
                 text += "\nStatus   OK"
+            elif skip2:
+                text += f"\nStatus   TP1={'OK' if ok1 else 'FAIL'} TP2=SKIP (lot terlalu kecil)"
             else:
                 text += f"\nStatus   TP1={'OK' if ok1 else 'FAIL'} TP2={'OK' if ok2 else 'FAIL'}"
 

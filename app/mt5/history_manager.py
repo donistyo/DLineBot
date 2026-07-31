@@ -3,7 +3,7 @@ import MetaTrader5 as mt5
 
 from app.mt5.session import MT5Session
 
-DEAL_ENTRY_OUT = 1
+DEAL_ENTRY_IN = 0
 
 
 class HistoryManager:
@@ -15,6 +15,34 @@ class HistoryManager:
     # =====================================
     # Get Today Closed Trades
     # =====================================
+
+    def _today_exits(self):
+
+        MT5Session.ensure_connection()
+
+        now = datetime.now()
+
+        start = datetime(
+            now.year,
+            now.month,
+            now.day
+        )
+
+        deals = mt5.history_deals_get(
+            start,
+            now
+        )
+
+        if deals is None:
+            return []
+
+        exits = [
+            d for d in deals
+            if d.type in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL)
+            and d.entry == mt5.DEAL_ENTRY_OUT
+        ]
+
+        return list(exits)
 
     def today(self):
 
@@ -39,20 +67,21 @@ class HistoryManager:
         trades = [
             d for d in deals
             if d.type in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL)
-            and d.entry == DEAL_ENTRY_OUT
+            and d.entry == DEAL_ENTRY_IN
         ]
 
         return list(trades)
 
-    # =====================================
-    # Summary
-    # =====================================
+    def today_exits(self):
+
+        return self._today_exits()
 
     def summary(self):
 
-        deals = self.today()
+        entries = self.today()
+        exits = self._today_exits()
 
-        trade = len(deals)
+        trade = len(entries)
 
         win = 0
         loss = 0
@@ -64,7 +93,7 @@ class HistoryManager:
         largest_win = 0
         largest_loss = 0
 
-        for deal in deals:
+        for deal in exits:
 
             p = deal.profit
 

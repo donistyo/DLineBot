@@ -3,9 +3,9 @@ from app.mt5.position_controller import PositionController, _log_close
 
 class EmergencyExit:
 
-    def __init__(self, max_loss_per_trade=50, max_daily_loss=200,
+    def __init__(self, max_loss_per_trade=150, max_daily_loss=600,
                  max_drawdown_pct=15, max_spread_mult=3):
-        self.controller = PositionController()
+
         self.max_loss_per_trade = max_loss_per_trade
         self.max_daily_loss = max_daily_loss
         self.max_drawdown_pct = max_drawdown_pct

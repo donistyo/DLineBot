@@ -20,7 +20,8 @@ from app.trading.auto_trader import AutoTrader
 from app.mt5.account_manager import AccountManager
 
 from app.config.features import FEATURE_COLUMNS
-from app.config.settings import DASHBOARD_URL, BROKER
+from app.config.settings import DASHBOARD_URL
+from app.config.settings import TRADE_LOT_SIZE, BROKER
 
 from app.logger.trade_logger import TradeLogger
 
@@ -44,6 +45,7 @@ from app.trading.daily_risk_manager import DailyRiskManager
 from app.live.daily_risk_view import DailyRiskView
 from app.trading.position_filter import PositionFilter
 from app.live.position_filter_view import PositionFilterView
+from app.trading.session_manager import SessionManager
 
 from app.mt5.position_manager import PositionManager
 
@@ -60,6 +62,8 @@ from app.trading.ai_exit import AIExit
 from app.live.ai_exit_view import AIExitView
 from app.trading.emergency_exit import EmergencyExit
 from app.live.emergency_exit_view import EmergencyExitView
+from app.live.recovery_exit_view import RecoveryExitView
+from app.mt5.position_controller import PositionController, _log_close
 from app.trading.smart_scalping import SmartScalpingEngine
 from app.live.smart_scalping_view import SmartScalpingView
 from app.trading.performance_manager import PerformanceManager
@@ -202,7 +206,10 @@ class LiveEngine:
             end_hour=23
         )
 
-        self.position_filter = PositionFilter()
+        max_pos = 10 if TRADE_LOT_SIZE <= 0.01 else 3
+        self.position_filter = PositionFilter(max_positions=max_pos)
+
+        self.session_manager = SessionManager(max_sessions=10, max_per_session=10)
 
         # =====================================
         # Logger
@@ -218,14 +225,24 @@ class LiveEngine:
 
         self.position_monitor = PositionMonitor()
 
+        self.controller = PositionController()
+
+        # Pre-populate recovery tracker for existing deep loss positions
+        existing = self.position_manager.get_positions(self.symbol)
+        self._recovery_seen = {}
+        if existing:
+            for p in existing:
+                if p.profit < -15.0:
+                    self._recovery_seen[p.ticket] = True
+
         if mode == "scalp":
             be_trigger = 999.0
-            trail_activation = 1.5
-            trail_distance = 0.5
+            trail_activation = 3.0
+            trail_distance = 1.5
             exit_min_conf = 1.0
-            daily_max_trade = 15
+            daily_max_trade = 100
             daily_max_loss = -100
-            daily_max_profit = 200
+            daily_max_profit = 9999
         else:
             be_trigger = 999.0
             trail_activation = 999.0
@@ -236,7 +253,7 @@ class LiveEngine:
             daily_max_profit = 300
 
         if BROKER == "exness" and mode == "scalp":
-            daily_max_trade = 50
+            daily_max_trade = 20
             daily_max_loss = -500
 
         self.break_even = BreakEvenManager(
@@ -254,8 +271,8 @@ class LiveEngine:
 
         if mode == "scalp":
             sp_levels = [
-                {"profit": 1,   "action": "BREAK_EVEN",      "label": "Break Even"},
-                {"profit": 3,   "action": "CLOSE",           "label": "Ambil Profit 3+"},
+                {"profit": 3,   "action": "BREAK_EVEN",      "label": "Break Even"},
+                {"profit": 4,   "action": "CLOSE",           "label": "Ambil Profit 4+"},
             ]
         else:
             sp_levels = None
@@ -266,6 +283,7 @@ class LiveEngine:
         )
 
         self._auto_trade_enabled = True
+        self._equity_floor_hit = False
 
         self.daily_risk = DailyRiskManager(
             max_trade=daily_max_trade,
@@ -278,13 +296,13 @@ class LiveEngine:
         self.history_manager = HistoryManager()
 
         if mode == "scalp":
-            dd_warning = 3.0
-            dd_danger = 7.0
-            max_dd = 7.0
+            dd_warning = 10.0
+            dd_danger = 25.0
+            max_dd = 30.0
         else:
-            dd_warning = 5.0
-            dd_danger = 10.0
-            max_dd = 10.0
+            dd_warning = 10.0
+            dd_danger = 25.0
+            max_dd = 30.0
 
         self.equity_manager = EquityManager(
             drawdown_warning=dd_warning,
@@ -315,11 +333,12 @@ class LiveEngine:
         )
 
         self.emergency_exit = EmergencyExit(
-            max_loss_per_trade=20,
+            max_loss_per_trade=30,
             max_daily_loss=9999,
             max_drawdown_pct=100,
             max_spread_mult=999
         )
+        self.emergency_exit.controller = self.controller
 
         self.trade_learner = TradeLearner(
             model_name=model_name
@@ -576,6 +595,51 @@ class LiveEngine:
             EquityView.show(equity)
 
             # ===============================
+            # Equity Floor: close all jika equity terlalu rendah
+            # ===============================
+
+            if equity and not self._equity_floor_hit:
+                floor = 1200.0
+                try:
+                    with open("runtime/trade_config.json") as _f:
+                        floor = float(json.load(_f).get("equity_floor", 1200.0))
+                except:
+                    pass
+
+                if equity["equity"] <= floor:
+                    self._equity_floor_hit = True
+                    floor_positions = self.position_manager.get_positions(self.symbol) or []
+                    closed = 0
+                    for fp in floor_positions:
+                        try:
+                            fr = self.controller.close(fp, caller="EQUITY_FLOOR")
+                            if fr.get("success"):
+                                closed += 1
+                        except Exception:
+                            pass
+                    self._auto_trade_enabled = False
+                    Path("runtime").mkdir(exist_ok=True)
+                    with open("runtime/auto_trade_enabled.json", "w") as f:
+                        json.dump({"enabled": False}, f)
+                    print()
+                    print("=" * 60)
+                    print("EQUITY FLOOR TRIGGERED")
+                    print("=" * 60)
+                    print(f"Equity      : {equity['equity']:.2f}")
+                    print(f"Floor       : {floor:.2f}")
+                    print(f"Closed      : {closed}/{len(floor_positions)} posisi")
+                    print("Auto-trade  : OFF (perlu re-enable manual)")
+                    try:
+                        self.telegram.send(
+                            f"⚠️ EQUITY FLOOR ({floor:.0f})\n"
+                            f"Equity {equity['equity']:.2f}\n"
+                            f"Ditutup {closed}/{len(floor_positions)} posisi\n"
+                            f"Auto-trade dimatikan."
+                        )
+                    except Exception:
+                        pass
+
+            # ===============================
             # Learning Manager
             # ===============================
 
@@ -733,12 +797,36 @@ class LiveEngine:
             daily_result = self.daily_risk.allow()
             DailyRiskView.show(daily_result)
 
+            if not daily_result["allowed"] and "Batas trade harian" in daily_result.get("reason", ""):
+                if self._auto_trade_enabled:
+                    self._auto_trade_enabled = False
+                    with open("runtime/auto_trade_enabled.json", "w") as f:
+                        json.dump({"enabled": False}, f)
+                    print()
+                    print("=" * 60)
+                    print("AUTO TRADE OFF")
+                    print("=" * 60)
+                    print(f"Alasan: {daily_result['reason']}")
+                    print(f"Trade hari ini: {daily_result.get('trade_today', '?')}")
+                    try:
+                        self.telegram.send(f"AutoTrade OFF — {daily_result['reason']} ({daily_result.get('trade_today', '?')} trade)")
+                    except:
+                        pass
+
             # ===============================
             # Position Filter
             # ===============================
 
+            try:
+                with open("runtime/trade_config.json") as _f:
+                    _lot = json.load(_f).get("lot_size", TRADE_LOT_SIZE)
+            except:
+                _lot = TRADE_LOT_SIZE
+            self.position_filter.max_positions = 5 if _lot <= 0.01 else 3
+
             position_result = self.position_filter.allow(
-                self.symbol
+                self.symbol,
+                direction=decision["action"]
             )
 
             PositionFilterView.show(position_result)
@@ -787,6 +875,11 @@ class LiveEngine:
                     )
                     ExitView.show(exit_result)
 
+                    recovery_result = self._check_recovery_close(position)
+                    if recovery_result:
+                        RecoveryExitView.show(recovery_result)
+                        continue
+
                     sp_result = self.smart_position.process(
                         position, prediction, regime, last
                     )
@@ -800,9 +893,19 @@ class LiveEngine:
                     )
                     AIExitView.show(ai_exit_result)
 
-                    emergency_result = self.emergency_exit.process(
-                        position, account, last
-                    )
+                    if position.ticket in self._recovery_seen:
+                        # Safety limit: kalau loss > -60, baru emergency close
+                        if position.profit <= -60:
+                            emergency_result = self.emergency_exit.process(
+                                position, account, last
+                            )
+                        else:
+                            emergency_result = {"status": "SKIP", "action": "NONE",
+                                                "reason": "Menunggu recovery.", "ticket": position.ticket}
+                    else:
+                        emergency_result = self.emergency_exit.process(
+                            position, account, last
+                        )
                     EmergencyExitView.show(emergency_result)
 
             else:
@@ -845,7 +948,10 @@ class LiveEngine:
 
             try:
                 with open("runtime/auto_trade_enabled.json") as f:
-                    self._auto_trade_enabled = json.load(f).get("enabled", True)
+                    _enabled_now = json.load(f).get("enabled", True)
+                    if _enabled_now and not self._auto_trade_enabled:
+                        self._equity_floor_hit = False
+                    self._auto_trade_enabled = _enabled_now
             except:
                 pass
 
@@ -865,6 +971,13 @@ class LiveEngine:
 
             )
 
+            session_result = None
+            if can_trade:
+                open_tickets = {p.ticket for p in positions} if positions else set()
+                session_result = self.session_manager.allow(open_tickets)
+                if not session_result["allowed"]:
+                    can_trade = False
+
             if can_trade:
 
                 risk = self.calculate_risk(
@@ -877,7 +990,11 @@ class LiveEngine:
             RiskView.show(risk)
 
             if risk:
-                risk["lot_size"] = 0.01
+                try:
+                    with open("runtime/trade_config.json") as _f:
+                        risk["lot_size"] = json.load(_f).get("lot_size", TRADE_LOT_SIZE)
+                except:
+                    risk["lot_size"] = TRADE_LOT_SIZE
                 risk["sl_points"] = 6.0
                 spread_price = float(last.get("spread", 0)) * 0.01
                 if decision["action"] == "BUY":
@@ -944,6 +1061,11 @@ class LiveEngine:
 
             elif not daily_result["allowed"]:
 
+                if not getattr(self, '_daily_limit_notified', False):
+                    reason = daily_result["reason"]
+                    self.telegram.send(f"⚠️ AUTO-TRADE STOP: {reason}")
+                    self._daily_limit_notified = True
+
                 result = {
 
                     "status": "BLOCKED",
@@ -959,6 +1081,26 @@ class LiveEngine:
                     "status": "BLOCKED",
 
                     "reason": position_result["reason"]
+
+                }
+
+            elif decision["action"] == "NO_TRADE":
+
+                result = {
+
+                    "status": "BLOCKED",
+
+                    "reason": "Sinyal WAIT / NO_TRADE."
+
+                }
+
+            elif session_result and not session_result["allowed"]:
+
+                result = {
+
+                    "status": "BLOCKED",
+
+                    "reason": session_result["reason"]
 
                 }
 
@@ -982,6 +1124,7 @@ class LiveEngine:
                     risk=risk,
                     symbol=self.symbol,
                     score=trade_score,
+                    signal=decision["action"],
                     filters={
                         "trend_ok": regime.get("mode") == "TREND" if regime else False,
                         "ai_ok": confidence_result.get("allowed", False),
@@ -1028,10 +1171,13 @@ class LiveEngine:
             if result.get("result") and hasattr(result["result"], "order"):
                 ticket = result["result"].order
 
+            if ticket:
+                self.session_manager.register_entry(ticket)
+
             trade_data = {
                 "time": last["time"],
                 "symbol": self.symbol,
-                "signal": prediction["signal"],
+                "signal": decision["action"] if decision["action"] != "NO_TRADE" else prediction["signal"],
                 "confidence": prediction["confidence"],
                 "action": decision["action"],
                 "status": result.get("status"),
@@ -1053,7 +1199,7 @@ class LiveEngine:
                 total_samples = self.learning_manager.track_open(
                     ticket=ticket or 0,
                     features=features,
-                    signal=prediction["signal"],
+                    signal=decision["action"] if decision["action"] != "NO_TRADE" else prediction["signal"],
                     confidence=prediction["confidence"]
                 )
                 print()
@@ -1160,7 +1306,7 @@ class LiveEngine:
 
             _today_deals = []
             try:
-                for d in self.history_manager.today():
+                for d in self.history_manager.today_exits():
                     _today_deals.append({
                         "ticket": d.ticket,
                         "symbol": d.symbol,
@@ -1239,6 +1385,28 @@ class LiveEngine:
             traceback.print_exc()
 
             return None
+
+    # =====================================
+    # Recovery Close
+    # =====================================
+
+    def _check_recovery_close(self, position):
+        ticket = position.ticket
+        profit = position.profit
+
+        if profit < -15.0:
+            self._recovery_seen[ticket] = True
+            return None
+
+        if self._recovery_seen.get(ticket) and 1.5 <= profit <= 4.5:
+            _log_close("RECOVERY", ticket, position.symbol, profit)
+            result = self.controller.close(position, caller="RECOVERY")
+            self._recovery_seen.pop(ticket, None)
+            return {"status": "CLOSED", "action": "RECOVERY",
+                    "reason": f"Recovery close at {profit:.2f}",
+                    "ticket": ticket, "result": result}
+
+        return None
 
     # =====================================
     # Stop Engine

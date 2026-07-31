@@ -57,7 +57,7 @@ def main():
     bot = TelegramNotifier()
     print("=" * 60)
     print("DLineBot Telegram Bot - polling commands...")
-    print("Kirim /dashboard ke @DLineTradeBot")
+    print("Kirim /help untuk daftar perintah")
     print(f"Push ke Vercel setiap {PUSH_INTERVAL}s")
     print(f"Poll order dari Vercel setiap {POLL_ORDER_INTERVAL}s")
     print("=" * 60)

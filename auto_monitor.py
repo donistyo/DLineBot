@@ -3,9 +3,9 @@ import time
 import datetime
 
 PATH = "C:/Program Files/MetaTrader 5/terminal64.exe"
-LOGIN = 160040915
-SERVER = "Exness-MT5Real20"
-PASSWORD = "@Maluku2024"
+LOGIN = 263495022
+SERVER = "Exness-MT5Real37"
+PASSWORD = "Donsen10!"
 
 mt5.initialize(path=PATH, login=LOGIN, server=SERVER, password=PASSWORD)
 

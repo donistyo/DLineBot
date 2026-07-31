@@ -53,17 +53,6 @@ class AutoTrader:
             }
 
         # ======================================
-        # Sudah ada posisi terbuka
-        # ======================================
-
-        if self.position_manager.has_position(symbol):
-
-            return {
-                "status": "SKIPPED",
-                "reason": "Masih ada posisi terbuka."
-            }
-
-        # ======================================
         # Build Order Request
         # ======================================
 

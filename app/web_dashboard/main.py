@@ -96,11 +96,12 @@ def _refresh_mt5_cache():
                     }
                 pos = mt5.positions_get()
                 _mt5_cache["positions"] = [
-                    {"ticket": p.ticket, "type": "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
-                     "volume": p.volume, "symbol": p.symbol, "open_price": p.price_open,
-                     "current_price": p.price_current, "profit": round(p.profit, 2),
-                     "sl": p.sl or 0, "tp": p.tp or 0, "comment": p.comment}
-                    for p in (pos or [])
+                     {"ticket": p.ticket, "type": "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
+                      "volume": p.volume, "symbol": p.symbol, "open_price": p.price_open,
+                      "current_price": p.price_current, "profit": round(p.profit, 2),
+                      "sl": p.sl or 0, "tp": p.tp or 0, "comment": p.comment,
+                      "open_time": datetime.fromtimestamp(p.time).strftime("%H:%M")}
+                     for p in (pos or [])
                 ]
                 pending = mt5.orders_get()
                 _mt5_cache["pending"] = [
@@ -396,6 +397,29 @@ def api_model_version():
     mvm = ModelVersionManager()
     return mvm.get_info()
 
+
+# =====================================
+# Live Market API
+# =====================================
+
+@app.get("/api/live-market")
+def api_live_market():
+    symbols = ["XAUUSDc"]
+    out = []
+    for sym in symbols:
+        try:
+            import MetaTrader5 as mt5
+            MT5Session.ensure_connection()
+            tick = mt5.symbol_info_tick(sym)
+            if tick:
+                spread = round((tick.ask - tick.bid) / mt5.symbol_info(sym).point, 0)
+                out.append({
+                    "symbol": sym, "bid": tick.bid, "ask": tick.ask,
+                    "spread": int(spread)
+                })
+        except:
+            pass
+    return {"symbols": out}
 
 # =====================================
 # Manual Order API
@@ -746,8 +770,16 @@ def api_auto_trade_monitor():
             "ticket": p["ticket"], "type": p["type"], "volume": p["volume"],
             "open_price": p["open_price"], "current": p["current_price"],
             "profit": p["profit"], "sl": p["sl"], "tp": p["tp"],
+            "open_time": p.get("open_time", ""),
             "be": be, "ts": ts
         })
+
+    try:
+        with open("runtime/trade_config.json") as _f:
+            _lot = json.load(_f).get("lot_size", 0.01)
+    except:
+        _lot = 0.01
+    _lot_opts = [0.01, 0.02, 0.03, 0.05, 0.10, 0.20, 0.50, 1.0]
 
     return {
         "account": {"balance": account.get("balance", 0), "equity": account.get("equity", 0)},
@@ -756,6 +788,8 @@ def api_auto_trade_monitor():
         "pending_orders": pending,
         "last_update": time.strftime("%H:%M:%S"),
         "auto_trade_enabled": _AUTO_TRADE_ENABLED,
+        "lot_size": _lot,
+        "lot_options": _lot_opts,
     }
 
 
@@ -778,11 +812,17 @@ def api_auto_trade_get_enabled():
 @app.get("/api/auto-trade/do-enable")
 def api_auto_trade_enable():
     global _AUTO_TRADE_ENABLED
+    from app.trading.daily_risk_manager import DailyRiskManager
+    drm = DailyRiskManager(max_trade=20, max_daily_loss=-500, max_daily_profit=9999)
+    dr = drm.allow()
+    warning = None
+    if not dr["allowed"]:
+        warning = dr["reason"]
     _AUTO_TRADE_ENABLED = True
     Path("runtime").mkdir(exist_ok=True)
     with open("runtime/auto_trade_enabled.json", "w") as f:
         json.dump({"enabled": True}, f)
-    return {"status": "ok", "enabled": True}
+    return {"status": "ok", "enabled": True, "warning": warning}
 
 @app.get("/api/auto-trade/do-disable")
 def api_auto_trade_disable():
@@ -792,6 +832,186 @@ def api_auto_trade_disable():
     with open("runtime/auto_trade_enabled.json", "w") as f:
         json.dump({"enabled": False}, f)
     return {"status": "ok", "enabled": False}
+
+@app.get("/api/auto-trade/lot-size")
+def api_get_lot_size():
+    try:
+        with open("runtime/trade_config.json") as f:
+            cfg = json.load(f)
+            return {"lot_size": cfg.get("lot_size", 0.01)}
+    except:
+        return {"lot_size": 0.01}
+
+@app.post("/api/auto-trade/set-lot")
+def api_set_lot_size(data: dict):
+    lot = float(data.get("lot_size", 0.01))
+    lot = max(0.01, min(lot, 10.0))
+    lot = round(lot, 2)
+    Path("runtime").mkdir(exist_ok=True)
+    try:
+        with open("runtime/trade_config.json") as f:
+            cfg = json.load(f)
+    except:
+        cfg = {}
+    cfg["lot_size"] = lot
+    with open("runtime/trade_config.json", "w") as f:
+        json.dump(cfg, f)
+    return {"status": "ok", "lot_size": lot}
+
+# =====================================
+# Account Management API (MT5 Login)
+# =====================================
+
+@app.get("/api/account/status")
+def api_account_status():
+    from app.mt5.account_store import get_active_account
+    if not MT5Session.is_connected():
+        MT5Session.connect()
+    info = {}
+    try:
+        acc = mt5.account_info()
+        if acc:
+            info = {
+                "login": acc.login,
+                "server": acc.server,
+                "name": acc.name,
+                "balance": acc.balance,
+                "equity": acc.equity,
+                "currency": acc.currency,
+                "leverage": acc.leverage,
+            }
+    except Exception:
+        pass
+    cfg = get_active_account()
+    return {
+        "connected": MT5Session.is_connected(),
+        "account": info,
+        "active_config": cfg,
+    }
+
+@app.post("/api/account/login")
+def api_account_login(data: dict):
+    from app.mt5.account_store import set_active_account, get_active_account
+    login = str(data.get("login", "")).strip()
+    password = str(data.get("password", "")).strip()
+    server = str(data.get("server", "")).strip()
+
+    if not login or not password or not server:
+        return {"success": False, "error": "Login, password, dan server wajib diisi"}
+
+    old_cfg = get_active_account()
+
+    Path("runtime").mkdir(exist_ok=True)
+    with open("runtime/auto_trade_enabled.json", "w") as f:
+        json.dump({"enabled": False}, f)
+
+    set_active_account(login, password, server)
+
+    ok = MT5Session.restart()
+
+    if not ok:
+        if old_cfg:
+            set_active_account(old_cfg.get("login"), old_cfg.get("password"), old_cfg.get("server"))
+        else:
+            from app.mt5.account_store import clear_active_account
+            clear_active_account()
+        MT5Session.restart()
+        err = mt5.last_error()
+        return {"success": False, "error": f"Login gagal: {err}", "retry_old": True}
+
+    acc = mt5.account_info()
+    info = {}
+    if acc:
+        info = {
+            "login": acc.login,
+            "server": acc.server,
+            "name": acc.name,
+            "balance": acc.balance,
+            "equity": acc.equity,
+            "currency": acc.currency,
+            "leverage": acc.leverage,
+        }
+    return {"success": True, "account": info}
+
+@app.post("/api/account/set-enabled")
+def api_account_set_enabled(data: dict):
+    enabled = bool(data.get("enabled", True))
+    Path("runtime").mkdir(exist_ok=True)
+    with open("runtime/auto_trade_enabled.json", "w") as f:
+        json.dump({"enabled": enabled}, f)
+    return {"status": "ok", "enabled": enabled}
+
+@app.get("/api/account/saved")
+def api_account_saved_list():
+    from app.mt5.account_store import get_saved_accounts
+    accounts = get_saved_accounts()
+    for a in accounts:
+        a = dict(a)
+        if "password" in a:
+            a["password"] = "***"
+    return {"accounts": accounts}
+
+@app.post("/api/account/saved")
+def api_account_saved_add(data: dict):
+    from app.mt5.account_store import add_saved_account
+    name = str(data.get("name", "")).strip()
+    login = str(data.get("login", "")).strip()
+    password = str(data.get("password", "")).strip()
+    server = str(data.get("server", "")).strip()
+    if not name or not login or not password or not server:
+        return {"success": False, "error": "Semua field wajib diisi"}
+    accounts = add_saved_account(name, login, password, server)
+    for a in accounts:
+        if "password" in a:
+            a["password"] = "***"
+    return {"success": True, "accounts": accounts}
+
+@app.delete("/api/account/saved/{name}")
+def api_account_saved_delete(name: str):
+    from app.mt5.account_store import remove_saved_account
+    accounts = remove_saved_account(name)
+    for a in accounts:
+        if "password" in a:
+            a["password"] = "***"
+    return {"success": True, "accounts": accounts}
+
+@app.post("/api/account/saved/{name}/switch")
+def api_account_saved_switch(name: str):
+    from app.mt5.account_store import find_saved_account, set_active_account, get_active_account
+    saved = find_saved_account(name)
+    if not saved:
+        return {"success": False, "error": f"Akun '{name}' tidak ditemukan"}
+
+    old_cfg = get_active_account()
+
+    Path("runtime").mkdir(exist_ok=True)
+    with open("runtime/auto_trade_enabled.json", "w") as f:
+        json.dump({"enabled": False}, f)
+
+    set_active_account(saved["login"], saved["password"], saved["server"])
+
+    ok = MT5Session.restart()
+
+    if not ok:
+        if old_cfg:
+            set_active_account(old_cfg.get("login"), old_cfg.get("password"), old_cfg.get("server"))
+        MT5Session.restart()
+        err = mt5.last_error()
+        return {"success": False, "error": f"Switch gagal: {err}", "retry_old": True}
+
+    acc = mt5.account_info()
+    info = {}
+    if acc:
+        info = {
+            "login": acc.login,
+            "server": acc.server,
+            "name": acc.name,
+            "balance": acc.balance,
+            "equity": acc.equity,
+            "currency": acc.currency,
+            "leverage": acc.leverage,
+        }
+    return {"success": True, "account": info}
 
 # =====================================
 # Position Management API
@@ -853,7 +1073,7 @@ def api_position_close(data: dict):
     controller = PositionController()
     from app.mt5.position_controller import _log_close
     _log_close("DASHBOARD_MANUAL", position.ticket, position.symbol, position.profit)
-    result = controller.close(position)
+    result = controller.close(position, caller="DASHBOARD_MANUAL")
     return {"success": True, "result": result}
 
 
@@ -1032,6 +1252,9 @@ tr:hover td { background:rgba(59,130,246,0.05); }
   <div class="sidebar-item" onclick="switchTab('intraday',this)">
     <span class="sidebar-icon">&#128202;</span><span>Intraday</span>
   </div>
+  <div class="sidebar-item" onclick="switchTab('settings',this)">
+    <span class="sidebar-icon">&#9881;</span><span>Settings</span>
+  </div>
 </div>
 <div class="sidebar-backdrop" onclick="closeSidebar()"></div>
 <div class="main-content">
@@ -1057,6 +1280,7 @@ tr:hover td { background:rgba(59,130,246,0.05); }
   <div class="sidebar-item" onclick="switchTab('grid',this)"><span class="sidebar-icon">&#9776;</span><span>Grid & Pending</span></div>
   <div class="sidebar-item" onclick="switchTab('scalping',this)"><span class="sidebar-icon">&#9889;</span><span>Scalping</span></div>
   <div class="sidebar-item" onclick="switchTab('intraday',this)"><span class="sidebar-icon">&#128202;</span><span>Intraday</span></div>
+  <div class="sidebar-item" onclick="switchTab('settings',this)"><span class="sidebar-icon">&#9881;</span><span>Settings</span></div>
 </div>
 
 <div id="tab-main">
@@ -1155,10 +1379,32 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 
 </div>
 
-<h2 style="margin-top:16px">Parted Order History (TP1/TP2)</h2>
+<h2 style="margin-top:16px">Live Market</h2>
 <div class="table-wrap"><table><thead><tr>
-  <th>Time</th><th>Sym</th><th>Sig</th><th>Action</th><th>Entry</th><th>SL</th><th>TP</th><th>Lot</th><th>Status</th><th>Ticket</th>
-</tr></thead><tbody id="partedOrders"></tbody></table></div>
+  <th>Symbol</th><th>Bid</th><th>Ask</th><th>Spread</th>
+  <th>SL (pt)</th><th>TP (pt)</th><th>Action</th>
+</tr></thead><tbody id="liveMarketPrices"></tbody></table></div>
+
+<h2 style="margin-top:16px">Trade Monitor</h2>
+<div id="atmPanel2" style="background:#1e293b;border-radius:6px;padding:16px;font-size:12px">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div><span style="color:#94a3b8">Balance</span><br><span id="atm_balance2" style="font-size:20px;font-weight:700;color:#e2e8f0">-</span></div>
+    <div><span style="color:#94a3b8">Equity</span><br><span id="atm_equity2" style="font-size:20px;font-weight:700;color:#e2e8f0">-</span></div>
+    <div><span style="color:#94a3b8">Scalp Score</span><br><span id="atm_score2" style="font-size:16px;font-weight:600">-</span></div>
+    <div><span style="color:#94a3b8">Grade</span><br><span id="atm_grade2" style="font-size:16px;font-weight:600">-</span></div>
+    <div><span style="color:#94a3b8">Direction</span><br><span id="atm_dir2" style="font-size:16px;font-weight:600">-</span></div>
+    <div><span style="color:#94a3b8">Action</span><br><span id="atm_action2" style="font-size:16px;font-weight:600">-</span></div>
+  </div>
+  <hr style="border-color:#334155;margin:12px 0">
+  <div style="color:#94a3b8;margin-bottom:6px">Positions <span id="atm_pos_count2" style="color:#e2e8f0">0</span></div>
+  <div id="atm_positions2" style="max-height:200px;overflow-y:auto"></div>
+  <hr style="border-color:#334155;margin:12px 0">
+  <div style="color:#94a3b8;margin-bottom:6px">Pending Orders <span id="atm_pend_count2" style="color:#e2e8f0">0</span></div>
+  <div id="atm_pending2" style="max-height:120px;overflow-y:auto;font-size:11px;color:#64748b"></div>
+  <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+    <span style="color:#475569;font-size:10px">Updated: <span id="atm_updated2">-</span></span>
+  </div>
+</div>
 
 </div>
 
@@ -1207,6 +1453,9 @@ tr:hover td { background:rgba(59,130,246,0.05); }
   <hr style="border-color:#334155;margin:12px 0">
   <div style="color:#94a3b8;margin-bottom:6px">Pending Orders <span id="atm_pend_count" style="color:#e2e8f0">0</span></div>
   <div id="atm_pending" style="max-height:120px;overflow-y:auto;font-size:11px;color:#64748b"></div>
+    <hr style="border-color:#334155;margin:12px 0">
+    <div style="color:#94a3b8;margin-bottom:4px;font-size:11px">Lot Size</div>
+    <div id="atm_lot_selector" style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px"></div>
     <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
       <button id="atm_toggle_btn" onclick="toggleAutoTrade()" style="flex:1;padding:6px;border:none;border-radius:4px;font-weight:600;cursor:pointer;font-size:11px">...</button>
       <span style="color:#475569;font-size:10px">Updated: <span id="atm_updated">-</span></span>
@@ -1284,6 +1533,61 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 
 </div>
 
+<div id="tab-settings" style="display:none">
+
+<h2>Account MT5</h2>
+<div id="accStatusBox" style="background:#1e293b;border-radius:6px;padding:16px;font-size:13px">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px" id="accInfoGrid">
+    <div><span style="color:#94a3b8">Status</span><br><span id="acc_conn" style="font-weight:700;color:#e2e8f0">-</span></div>
+    <div><span style="color:#94a3b8">Login</span><br><span id="acc_login" style="font-weight:700;color:#e2e8f0">-</span></div>
+    <div><span style="color:#94a3b8">Server</span><br><span id="acc_server" style="font-weight:700;color:#e2e8f0">-</span></div>
+    <div><span style="color:#94a3b8">Name</span><br><span id="acc_name" style="font-weight:700;color:#e2e8f0">-</span></div>
+    <div><span style="color:#94a3b8">Balance</span><br><span id="acc_balance" style="font-weight:700;color:#6ee7b7">-</span></div>
+    <div><span style="color:#94a3b8">Equity</span><br><span id="acc_equity" style="font-weight:700;color:#6ee7b7">-</span></div>
+    <div><span style="color:#94a3b8">Leverage</span><br><span id="acc_lev" style="font-weight:700;color:#e2e8f0">-</span></div>
+  </div>
+</div>
+
+<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+  <button onclick="reloadAccountStatus()" style="padding:8px 14px;background:#334155;color:#e2e8f0;border:none;border-radius:4px;cursor:pointer">&#128260; Refresh</button>
+  <button onclick="setAutoTradeAfterSwitch(true)" id="btnAutoReenable" style="padding:8px 14px;background:#22c55e;color:#fff;border:none;border-radius:4px;cursor:pointer">Aktifkan Auto-Trade</button>
+  <button onclick="setAutoTradeAfterSwitch(false)" style="padding:8px 14px;background:#ef4444;color:#fff;border:none;border-radius:4px;cursor:pointer">Matikan Auto-Trade</button>
+</div>
+
+<h2 style="margin-top:18px">Login ke Akun Lain</h2>
+<div style="background:#1e293b;border-radius:6px;padding:16px;max-width:520px">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div><label style="font-size:11px;color:#94a3b8">Login ID</label><br><input id="acc_login_in" placeholder="mis. 160040915" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">Server</label><br><input id="acc_server_in" placeholder="mis. Exness-MT5Real20" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div style="grid-column:span 2"><label style="font-size:11px;color:#94a3b8">Password MT5</label><br><input id="acc_pass_in" type="password" placeholder="password" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+  </div>
+  <div style="margin-top:12px;display:flex;gap:8px">
+    <button onclick="connectAccount()" style="flex:1;padding:9px;background:#3b82f6;color:#fff;border:none;border-radius:4px;font-weight:600;cursor:pointer">CONNECT</button>
+    <button onclick="saveAccountOnly()" style="padding:9px;background:#334155;color:#94a3b8;border:none;border-radius:4px;cursor:pointer">Simpan saja</button>
+  </div>
+  <div id="acc_login_result" style="margin-top:12px;font-size:12px;color:#6ee7b7;word-break:break-all"></div>
+</div>
+
+<h2 style="margin-top:18px">Akun Tersimpan</h2>
+<div class="table-wrap" style="max-width:640px"><table><thead><tr>
+  <th>Nama</th><th>Login</th><th>Server</th><th>Action</th>
+</tr></thead><tbody id="savedAccountsBody"></tbody></table></div>
+
+<div style="background:#1e293b;border-radius:6px;padding:16px;max-width:520px;margin-top:12px">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div><label style="font-size:11px;color:#94a3b8">Nama Akun</label><br><input id="sv_name" placeholder="mis. Real20" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">Login ID</label><br><input id="sv_login" placeholder="mis. 160040915" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">Server</label><br><input id="sv_server" placeholder="mis. Exness-MT5Real20" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">Password</label><br><input id="sv_pass" type="password" placeholder="password" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+  </div>
+  <div style="margin-top:12px">
+    <button onclick="addSavedAccount()" style="padding:9px 16px;background:#22c55e;color:#fff;border:none;border-radius:4px;cursor:pointer">+ Tambah Akun</button>
+  </div>
+  <div id="sv_result" style="margin-top:10px;font-size:12px;color:#6ee7b7"></div>
+</div>
+
+</div>
+
 <script>
 let charts = {};
 let analyticsLoaded = false;
@@ -1308,7 +1612,8 @@ function switchTab(name, el) {
     fetchAnalytics();
   }
   if (name === 'manual') {
-    fetchPartedOrders();
+    fetchLiveMarket();
+    fetchAutoTradeMonitor();
     fetchManualChart();
   }
   if (name === 'grid') {
@@ -1327,6 +1632,10 @@ function switchTab(name, el) {
   }
   if (name === 'intraday') {
     fetchIntraday();
+  }
+  if (name === 'settings') {
+    loadAccountStatus();
+    loadSavedAccounts();
   }
 }
 
@@ -1374,7 +1683,9 @@ let manualChartInst = null;
 
 async function fetchManualChart(entryLine, slLine, tp1Line, tp2Line) {
   try {
-    Chart.register(ChartAnnotation);
+    if (typeof ChartAnnotation !== 'undefined') {
+      Chart.register(ChartAnnotation);
+    }
     const pc = await fetchJson('/api/chart/candles', {candles:[]});
     if (!pc.candles || !pc.candles.length) return;
     const labels = pc.candles.map(c => c.time);
@@ -1659,49 +1970,68 @@ async function fetchAnalytics() {
   } catch(e) { console.error('Analytics error:', e); }
 }
 
-async function fetchPartedOrders() {
+// =====================================
+// Live Market
+// =====================================
+
+async function fetchLiveMarket() {
   try {
-    const data = await fetchJson('/api/order/parted?limit=20', []);
-    document.getElementById('partedOrders').innerHTML = data.map(t => {
-      const sym = (t.symbol||'XAUUSDc').replace(/'/g,'');
-      const sig = (t.signal||'').replace(/'/g,'');
-      const vol = t.lot_size||0.01;
-      const entry = t.entry_price||'';
-      const sl = t.stop_loss||'';
-      const tp = t.take_profit||'';
-      return '<tr style="cursor:pointer" data-sym="'+sym+'" data-sig="'+sig+'" data-vol="'+vol+'" data-entry="'+entry+'" data-sl="'+sl+'" data-tp="'+tp+'"><td style="font-size:10px">'+(t.time?.split(' ')[1]||t.time)+'</td><td>'+sym+'</td><td><span class="badge '+sig.toLowerCase()+'">'+sig+'</span></td><td>'+(t.action||'-')+'</td><td>'+entry+'</td><td>'+sl+'</td><td>'+tp+'</td><td>'+vol+'</td><td>'+(t.status||'-')+'</td><td>'+(t.ticket||'-')+'</td></tr>';
+    const d = await fetchJson('/api/live-market', {symbols:[]});
+    const syms = d.symbols || [];
+    const html = syms.map(s => {
+      const bid = s.bid || 0;
+      const ask = s.ask || 0;
+      return '<tr style="cursor:pointer" data-sym="'+s.symbol+'" data-bid="'+bid+'" data-ask="'+ask+'">' +
+        '<td>'+s.symbol+'</td>' +
+        '<td style="font-weight:600;color:#6ee7b7">'+bid.toFixed(2)+'</td>' +
+        '<td style="font-weight:600;color:#f87171">'+ask.toFixed(2)+'</td>' +
+        '<td>'+s.spread+'</td>' +
+        '<td><input type="number" class="lm-sl" value="6" min="1" max="100" style="width:60px;padding:4px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;font-size:11px"></td>' +
+        '<td><input type="number" class="lm-tp" value="4" min="1" max="200" style="width:60px;padding:4px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;font-size:11px"></td>' +
+        '<td style="display:flex;gap:4px">' +
+          '<button class="lm-btn-buy" style="padding:4px 10px;background:#22c55e;color:#fff;border:none;border-radius:4px;font-size:11px;cursor:pointer">BUY</button>' +
+          '<button class="lm-btn-sell" style="padding:4px 10px;background:#ef4444;color:#fff;border:none;border-radius:4px;font-size:11px;cursor:pointer">SELL</button>' +
+        '</td></tr>';
     }).join('');
-  } catch(e) { console.error('Parted orders error:', e); }
+    document.getElementById('liveMarketPrices').innerHTML = html;
+
+    document.querySelectorAll('.lm-btn-buy').forEach(btn => {
+      btn.onclick = function(e) {
+        e.stopPropagation();
+        const tr = this.closest('tr');
+        fillOrder(tr, 'BUY');
+      };
+    });
+    document.querySelectorAll('.lm-btn-sell').forEach(btn => {
+      btn.onclick = function(e) {
+        e.stopPropagation();
+        const tr = this.closest('tr');
+        fillOrder(tr, 'SELL');
+      };
+    });
+  } catch(e) { console.error('Live market error:', e); }
 }
 
-document.getElementById('partedOrders').addEventListener('click', function(e) {
-  const tr = e.target.closest('tr');
-  if (!tr) return;
+function fillOrder(tr, side) {
   const sym = tr.dataset.sym || 'XAUUSDc';
-  const sig = tr.dataset.sig || 'BUY';
-  const vol = '0.01';
-  const entry = tr.dataset.entry || '';
-  const entryVal = parseFloat(entry);
-  let sl = '', tp1 = '';
-  if (!isNaN(entryVal) && entryVal > 0) {
-    if (sig === 'BUY') {
-      sl = (entryVal - 6).toFixed(1);
-      tp1 = (entryVal + 2).toFixed(1);
-    } else {
-      sl = (entryVal + 6).toFixed(1);
-      tp1 = (entryVal - 2).toFixed(1);
-    }
-  }
+  const bid = parseFloat(tr.dataset.bid) || 0;
+  const ask = parseFloat(tr.dataset.ask) || 0;
+  const entry = side === 'BUY' ? ask : bid;
+  const slPt = parseFloat(tr.querySelector('.lm-sl').value) || 6;
+  const tpPt = parseFloat(tr.querySelector('.lm-tp').value) || 4;
+  const sl = side === 'BUY' ? (entry - slPt) : (entry + slPt);
+  const tp1 = side === 'BUY' ? (entry + tpPt) : (entry - tpPt);
+
   document.getElementById('mo_symbol').value = sym;
-  document.getElementById('mo_signal').value = sig;
-  document.getElementById('mo_volume').value = vol;
-  document.getElementById('mo_entry').value = entry;
-  document.getElementById('mo_sl').value = sl;
-  document.getElementById('mo_tp1').value = tp1;
+  document.getElementById('mo_signal').value = side;
+  document.getElementById('mo_volume').value = '0.01';
+  document.getElementById('mo_entry').value = entry.toFixed(2);
+  document.getElementById('mo_sl').value = sl.toFixed(2);
+  document.getElementById('mo_tp1').value = tp1.toFixed(2);
   document.getElementById('mo_tp2').value = '';
-  document.getElementById('mo_result').textContent = 'SL 6pt / TP target 1.0-2.0 (otomatis)';
+  document.getElementById('mo_result').textContent = 'SL ' + slPt + 'pt / TP ' + tpPt + 'pt (dari Live Market)';
   window.scrollTo(0, document.getElementById('tab-manual').offsetTop - 10);
-});
+}
 
 // =====================================
 // =====================================
@@ -1727,7 +2057,11 @@ async function toggleAutoTrade() {
       btn.textContent = r.enabled ? 'STOP AUTO-TRADE' : 'START AUTO-TRADE';
       btn.style.background = r.enabled ? '#dc2626' : '#22c55e';
       btn.style.color = '#fff';
-      showNotif(r.enabled ? 'AUTO-TRADE DIMULAI' : 'AUTO-TRADE DIHENTIKAN', r.enabled ? '#22c55e' : '#dc2626');
+      if (r.warning) {
+        showNotif('PERINGATAN: ' + r.warning, '#f59e0b');
+      } else {
+        showNotif(r.enabled ? 'AUTO-TRADE DIMULAI' : 'AUTO-TRADE DIHENTIKAN', r.enabled ? '#22c55e' : '#dc2626');
+      }
     }
   } catch(e) { console.error('Toggle error:', e); }
 }
@@ -1741,6 +2075,13 @@ async function loadAutoTradeEnabled() {
     btn.style.background = r.enabled ? '#dc2626' : '#22c55e';
     btn.style.color = '#fff';
   } catch(e) { console.error('Load enabled error:', e); }
+}
+
+async function setLotSize(lot) {
+  try {
+    await fetch('/api/auto-trade/set-lot', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({lot_size:lot}) });
+    fetchAutoTradeMonitor();
+  } catch(e) { console.error('Set lot error:', e); }
 }
 
 async function fetchAutoTradeMonitor() {
@@ -1766,6 +2107,7 @@ async function fetchAutoTradeMonitor() {
         '<span class="'+(p.type==='BUY'?'green':'red')+'">'+p.type+'</span>' +
         '<span>'+p.volume+'</span>' +
         '<span>'+p.profit+'</span>' +
+        '<span style="font-size:10px;color:#94a3b8">'+(p.open_time||'')+'</span>' +
         '<span style="font-size:10px;color:#94a3b8">'+(p.be?'BE ':'')+(p.ts?'TS ':'')+'</span>' +
       '</div>'
     ).join('') : '<div style="color:#64748b;padding:4px 0">Tidak ada posisi</div>';
@@ -1774,6 +2116,45 @@ async function fetchAutoTradeMonitor() {
     document.getElementById('atm_pend_count').textContent = pen.length;
     document.getElementById('atm_pending').textContent = pen.length ? pen.map(o => o.type+' @ '+o.price).join(', ') : 'Tidak ada pending';
     document.getElementById('atm_updated').textContent = d.last_update || '-';
+
+    // Lot size selector
+    const curLot = d.lot_size || 0.01;
+    const lotOpts = d.lot_options || [0.01, 0.02, 0.03, 0.05, 0.10];
+    const lotContainer = document.getElementById('atm_lot_selector');
+    if (lotContainer) {
+      lotContainer.innerHTML = lotOpts.map(l =>
+        '<button onclick="setLotSize('+l+')" style="' +
+        'padding:4px 10px;border:1px solid '+(l===curLot?'#3b82f6':'#334155')+';' +
+        'border-radius:4px;background:'+(l===curLot?'rgba(59,130,246,0.2)':'transparent')+';' +
+        'color:'+(l===curLot?'#60a5fa':'#94a3b8')+';cursor:pointer;font-size:11px;font-weight:'+(l===curLot?'700':'400')+'">' +
+        (l < 1 ? l.toFixed(2) : l.toFixed(1)) +
+        '</button>'
+      ).join('');
+    }
+
+    // Manual tab monitor
+    document.getElementById('atm_balance2').textContent = d.account?.balance != null ? d.account.balance.toFixed(2) : '-';
+    document.getElementById('atm_equity2').textContent = d.account?.equity != null ? d.account.equity.toFixed(2) : '-';
+    document.getElementById('atm_score2').textContent = sc;
+    document.getElementById('atm_score2').style.color = sc >= 65 ? '#6ee7b7' : sc >= 50 ? '#facc15' : '#f87171';
+    document.getElementById('atm_grade2').textContent = ss.grade || '-';
+    document.getElementById('atm_dir2').textContent = ss.direction || '-';
+    const actEl2 = document.getElementById('atm_action2');
+    actEl2.textContent = act;
+    actEl2.style.color = act === 'TRADE' ? '#6ee7b7' : '#f87171';
+    document.getElementById('atm_pos_count2').textContent = pos.length;
+    document.getElementById('atm_positions2').innerHTML = pos.length ? pos.map(p =>
+      '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #0f172a">' +
+        '<span class="'+(p.type==='BUY'?'green':'red')+'">'+p.type+'</span>' +
+        '<span>'+p.volume+'</span>' +
+        '<span>'+p.profit+'</span>' +
+        '<span style="font-size:10px;color:#94a3b8">'+(p.open_time||'')+'</span>' +
+        '<span style="font-size:10px;color:#94a3b8">'+(p.be?'BE ':'')+(p.ts?'TS ':'')+'</span>' +
+      '</div>'
+    ).join('') : '<div style="color:#64748b;padding:4px 0">Tidak ada posisi</div>';
+    document.getElementById('atm_pend_count2').textContent = pen.length;
+    document.getElementById('atm_pending2').textContent = pen.length ? pen.map(o => o.type+' @ '+o.price).join(', ') : 'Tidak ada pending';
+    document.getElementById('atm_updated2').textContent = d.last_update || '-';
   } catch(e) { console.error('AT Monitor error:', e); }
 }
 
@@ -1984,7 +2365,7 @@ function sendManualOrder(dryRun) {
           const t2 = r.result_2?.order || '-';
           el.innerHTML = 'ORDER SENT - Ticket: ' + t1 + ' / ' + t2;
         }
-        fetchPartedOrders();
+        fetchLiveMarket();
         const entry = r.entry_price;
         const sl = r.stop_loss;
         const tp1 = r.take_profit1;
@@ -2045,12 +2426,14 @@ setInterval(() => {
   }
 }, 15000);
 
-// Manual chart refresh every 15 detik
+// Manual chart + monitor refresh every 10 detik
 setInterval(() => {
   if (document.getElementById('tab-manual') && document.getElementById('tab-manual').style.display !== 'none') {
+    fetchLiveMarket();
+    fetchAutoTradeMonitor();
     fetchManualChart();
   }
-}, 15000);
+}, 10000);
 
 // Scalping auto-refresh every 15 detik
 setInterval(() => {
@@ -2065,6 +2448,182 @@ setInterval(() => {
     fetchIntraday();
   }
 }, 15000);
+
+// Settings auto-refresh every 20 detik
+setInterval(() => {
+  if (document.getElementById('tab-settings') && document.getElementById('tab-settings').style.display !== 'none') {
+    loadAccountStatus();
+    loadSavedAccounts();
+  }
+}, 20000);
+
+// Settings tab functions
+async function loadAccountStatus() {
+  const d = await fetchJson('/api/account/status', {connected:false, account:{}, active_config:{}});
+  const el = id => document.getElementById(id);
+  const connected = !!d.connected;
+  el('acc_conn').textContent = connected ? 'TERHUBUNG' : 'TERPUTUS';
+  el('acc_conn').style.color = connected ? '#22c55e' : '#ef4444';
+  const a = d.account || {};
+  el('acc_login').textContent = a.login ?? '-';
+  el('acc_server').textContent = a.server ?? '-';
+  el('acc_name').textContent = a.name ?? '-';
+  el('acc_balance').textContent = a.balance != null ? a.balance.toLocaleString(undefined,{maximumFractionDigits:2}) + ' ' + (a.currency||'') : '-';
+  el('acc_equity').textContent = a.equity != null ? a.equity.toLocaleString(undefined,{maximumFractionDigits:2}) + ' ' + (a.currency||'') : '-';
+  el('acc_lev').textContent = a.leverage ? '1:' + a.leverage : '-';
+}
+async function reloadAccountStatus() {
+  const btn = document.getElementById('accLoginResult') || document.getElementById('acc_login_result');
+  try {
+    const r = await fetch('/api/account/status');
+    const d = await r.json();
+    if (d && d.connected) {
+      showNotif('Akun terhubung', '#22c55e');
+    } else {
+      showNotif('Akun terputus', '#ef4444');
+    }
+  } catch(e) {}
+  await loadAccountStatus();
+  await loadSavedAccounts();
+}
+function setAutoTradeAfterSwitch(enabled) {
+  return fetch('/api/account/set-enabled', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({enabled: !!enabled})
+  }).then(r => r.json()).then(d => {
+    showNotif(d.enabled ? 'Auto-trade AKTIF' : 'Auto-trade MATI', d.enabled ? '#22c55e' : '#ef4444');
+  }).catch(() => showNotif('Gagal set auto-trade', '#ef4444'));
+}
+async function connectAccount() {
+  const resEl = document.getElementById('acc_login_result');
+  resEl.style.color = '#fbbf24';
+  resEl.textContent = 'Menghubungkan...';
+  const login = document.getElementById('acc_login_in').value.trim();
+  const pass = document.getElementById('acc_pass_in').value.trim();
+  const server = document.getElementById('acc_server_in').value.trim();
+  if (!login || !pass || !server) {
+    resEl.style.color = '#ef4444';
+    resEl.textContent = 'Login, password, dan server wajib diisi';
+    return;
+  }
+  try {
+    const r = await fetch('/api/account/login', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({login, password: pass, server})
+    });
+    const d = await r.json();
+    if (d.success) {
+      resEl.style.color = '#6ee7b7';
+      resEl.textContent = 'Berhasil login ke ' + d.account.login + ' @ ' + d.account.server + ' (balance ' + d.account.balance.toLocaleString() + ')';
+      showNotif('Akun berhasil diganti', '#22c55e');
+      await loadAccountStatus();
+      await loadSavedAccounts();
+    } else {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = 'Gagal: ' + (d.error || 'unknown');
+      showNotif('Gagal login akun', '#ef4444');
+    }
+  } catch(e) {
+    resEl.style.color = '#ef4444';
+    resEl.textContent = 'Error: ' + e.message;
+  }
+}
+async function saveAccountOnly() {
+  const login = document.getElementById('acc_login_in').value.trim();
+  const pass = document.getElementById('acc_pass_in').value.trim();
+  const server = document.getElementById('acc_server_in').value.trim();
+  const name = prompt('Nama untuk akun ini (mis. Real20):');
+  if (!name) return;
+  const d = await fetch('/api/account/saved', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({name, login, password: pass, server})
+  }).then(r => r.json());
+  if (d.success) {
+    showNotif('Akun tersimpan', '#22c55e');
+    loadSavedAccounts();
+  } else {
+    showNotif('Gagal simpan', '#ef4444');
+  }
+}
+async function loadSavedAccounts() {
+  const d = await fetchJson('/api/account/saved', {accounts:[]});
+  const tbody = document.getElementById('savedAccountsBody');
+  const accs = d.accounts || [];
+  if (!accs.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#94a3b8">Belum ada akun tersimpan</td></tr>';
+    return;
+  }
+  tbody.innerHTML = accs.map(a => `
+    <tr>
+      <td><b>${escapeHtml(a.name)}</b></td>
+      <td>${escapeHtml(a.login)}</td>
+      <td>${escapeHtml(a.server)}</td>
+      <td>
+        <button onclick="switchSavedAccount('${escapeJs(a.name)}')" style="padding:4px 10px;background:#3b82f6;color:#fff;border:none;border-radius:4px;cursor:pointer">Switch</button>
+        <button onclick="deleteSavedAccount('${escapeJs(a.name)}')" style="padding:4px 10px;background:#334155;color:#ef4444;border:none;border-radius:4px;cursor:pointer">Hapus</button>
+      </td>
+    </tr>`).join('');
+}
+async function switchSavedAccount(name) {
+  if (!confirm('Ganti ke akun "' + name + '"? Auto-trade akan dimatikan sementara.')) return;
+  const d = await fetch('/api/account/saved/' + encodeURIComponent(name) + '/switch', {
+    method: 'POST'
+  }).then(r => r.json());
+  if (d.success) {
+    showNotif('Switch ke ' + d.account.login, '#22c55e');
+    await loadAccountStatus();
+  } else {
+    showNotif('Gagal switch: ' + (d.error||''), '#ef4444');
+  }
+}
+async function deleteSavedAccount(name) {
+  if (!confirm('Hapus akun "' + name + '" dari daftar?')) return;
+  const d = await fetch('/api/account/saved/' + encodeURIComponent(name), {
+    method: 'DELETE'
+  }).then(r => r.json());
+  if (d.success) {
+    showNotif('Akun dihapus', '#ef4444');
+    loadSavedAccounts();
+  }
+}
+async function addSavedAccount() {
+  const name = document.getElementById('sv_name').value.trim();
+  const login = document.getElementById('sv_login').value.trim();
+  const pass = document.getElementById('sv_pass').value.trim();
+  const server = document.getElementById('sv_server').value.trim();
+  const resEl = document.getElementById('sv_result');
+  if (!name || !login || !pass || !server) {
+    resEl.style.color = '#ef4444';
+    resEl.textContent = 'Semua field wajib diisi';
+    return;
+  }
+  const d = await fetch('/api/account/saved', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({name, login, password: pass, server})
+  }).then(r => r.json());
+  if (d.success) {
+    resEl.style.color = '#6ee7b7';
+    resEl.textContent = 'Akun "' + name + '" tersimpan';
+    document.getElementById('sv_name').value = '';
+    document.getElementById('sv_login').value = '';
+    document.getElementById('sv_pass').value = '';
+    document.getElementById('sv_server').value = '';
+    loadSavedAccounts();
+  } else {
+    resEl.style.color = '#ef4444';
+    resEl.textContent = d.error || 'Gagal simpan';
+  }
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function escapeJs(s) {
+  return String(s).replace(/'/g, "\\'").replace(/"/g, '\\"');
+}
 </script>
 </div>
 </div>

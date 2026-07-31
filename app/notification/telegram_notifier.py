@@ -5,6 +5,7 @@ import requests
 from datetime import datetime
 
 from app.config.settings import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
+from app.mt5.position_controller import PositionController
 
 
 class TelegramNotifier:
@@ -68,6 +69,61 @@ class TelegramNotifier:
             chat_id = msg["chat"]["id"]
             if text == "/dashboard":
                 self._send_dashboard(chat_id)
+            elif text in ("/start", "/on"):
+                self._cmd_start(chat_id)
+            elif text == "/off":
+                self._cmd_off(chat_id)
+            elif text == "/closeall":
+                self._cmd_closeall(chat_id)
+            elif text == "/help":
+                self._cmd_help(chat_id)
+
+    def _cmd_help(self, chat_id):
+        help_text = (
+            "\U0001f916 DLineBot Commands\n\n"
+            "/dashboard - Tampilkan dashboard\n"
+            "/start atau /on - Hidupkan auto-trade\n"
+            "/off - Matikan auto-trade\n"
+            "/closeall - Tutup semua posisi\n"
+            "/help - Bantuan ini"
+        )
+        self.send(help_text, chat_id)
+
+    def _cmd_start(self, chat_id):
+        try:
+            with open("runtime/auto_trade_enabled.json", "w") as f:
+                json.dump({"enabled": True}, f)
+            self.send("\u2705 Auto-Trade diaktifkan", chat_id)
+        except Exception as e:
+            self.send(f"Gagal: {e}", chat_id)
+
+    def _cmd_off(self, chat_id):
+        try:
+            with open("runtime/auto_trade_enabled.json", "w") as f:
+                json.dump({"enabled": False}, f)
+            self.send("\u274c Auto-Trade dimatikan", chat_id)
+        except Exception as e:
+            self.send(f"Gagal: {e}", chat_id)
+
+    def _cmd_closeall(self, chat_id):
+        try:
+            import MetaTrader5 as mt5
+            mt5.initialize()
+            positions = mt5.positions_get()
+            count = len(positions) if positions else 0
+            if count == 0:
+                self.send("Tidak ada posisi terbuka", chat_id)
+                return
+            controller = PositionController()
+            closed = 0
+            for p in positions:
+                r = controller.close(p, caller="TELEGRAM_CLOSEALL")
+                if r.get("success"):
+                    closed += 1
+            mt5.shutdown()
+            self.send(f"\u2705 Ditutup {closed}/{count} posisi", chat_id)
+        except Exception as e:
+            self.send(f"Gagal close all: {e}", chat_id)
 
     def _send_dashboard(self, chat_id):
         overview_path = Path("runtime/overview.json")
@@ -109,8 +165,9 @@ class TelegramNotifier:
     # OPEN notification
     # =====================================
 
-    def notify_open(self, prediction, risk, symbol, score=None, filters=None):
-        signal = prediction["signal"]
+    def notify_open(self, prediction, risk, symbol, score=None, filters=None, signal=None):
+        if not signal:
+            signal = prediction.get("signal", "HOLD")
         confidence = prediction["confidence"]
         lot = risk.get("lot_size", 0)
         entry = risk.get("entry_price", 0)

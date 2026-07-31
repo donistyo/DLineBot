@@ -52,7 +52,7 @@ def main():
         symbol="XAUUSDc",
         timeframe="M1",
         bars=2000,
-        dry_run=True,
+        dry_run=False,
         mode="scalp"
     )
 

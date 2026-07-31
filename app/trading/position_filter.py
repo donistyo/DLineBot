@@ -3,56 +3,40 @@ from app.mt5.position_manager import PositionManager
 
 class PositionFilter:
 
-    def __init__(self):
+    def __init__(self, max_positions=5):
 
         self.position_manager = PositionManager()
+        self.max_positions = max_positions
 
-    def allow(self, symbol="XAUUSD"):
+    def allow(self, symbol="XAUUSD", direction=None):
 
-        # ===========================
-        # Masih ada posisi?
-        # ===========================
+        positions = self.position_manager.get_positions(symbol) or []
+        count = len(positions)
 
-        if self.position_manager.has_position(symbol):
-
-            positions = self.position_manager.get_positions(symbol)
-
-            if positions:
-
-                pos = positions[0]
-
-                trade_type = "BUY" if pos.type == 0 else "SELL"
-
+        if direction == "BUY":
+            if self.position_manager.has_sell(symbol):
                 return {
-
                     "allowed": False,
-
-                    "reason": f"Masih ada posisi {trade_type}.",
-
-                    "position_type": trade_type,
-
-                    "ticket": pos.ticket,
-
-                    "volume": pos.volume
-
+                    "reason": "Ada posisi SELL berlawanan arah.",
+                    "position_count": count
+                }
+        elif direction == "SELL":
+            if self.position_manager.has_buy(symbol):
+                return {
+                    "allowed": False,
+                    "reason": "Ada posisi BUY berlawanan arah.",
+                    "position_count": count
                 }
 
+        if count >= self.max_positions:
             return {
-
                 "allowed": False,
-
-                "reason": "Masih ada posisi terbuka."
-
+                "reason": f"Max posisi ({self.max_positions}) tercapai.",
+                "position_count": count
             }
 
-        # ===========================
-        # Tidak ada posisi
-        # ===========================
-
         return {
-
             "allowed": True,
-
-            "reason": "Tidak ada posisi terbuka."
-
+            "reason": f"Posisi {count}/{self.max_positions}.",
+            "position_count": count
         }

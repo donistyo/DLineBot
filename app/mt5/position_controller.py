@@ -30,28 +30,39 @@ class PositionController:
     # Close Position
     # ======================================
 
-    def close(self, position):
+    def close(self, position, caller=None):
         _log_close("POSITION_CONTROLLER", position.ticket, position.symbol, position.profit)
-        import sys
-        stack = traceback.format_stack()[:-1]
-        caller = "UNKNOWN"
-        for line in stack:
-            if "EMERGENCY_EXIT" in line:
-                caller = "EMERGENCY_EXIT"; break
-            if "AI_EXIT" in line:
-                caller = "AI_EXIT"; break
-            if "EXIT_MANAGER" in line:
-                caller = "EXIT_MANAGER"; break
-            if "SMART_POSITION" in line:
-                caller = "SMART_POSITION"; break
-            if "TIME_EXIT" in line:
-                caller = "TIME_EXIT"; break
-            if "CLOSE_PARTIAL" in line:
-                caller = "CLOSE_PARTIAL"; break
-            if "DASHBOARD_MANUAL" in line:
-                caller = "DASHBOARD_MANUAL"; break
-            if "close_all" in line or "close_pos1" in line:
-                caller = "SCRIPT"; break
+        if not caller:
+            import sys
+            stack = traceback.format_stack()[:-1]
+            with open("runtime/close_trace.log", "a") as f:
+                f.write("===== STACK DUMP =====\n")
+                for i, ln in enumerate(stack):
+                    f.write(f"[{i}] {ln.strip()[-120:]}\n")
+            for line in stack:
+                lower = line.lower()
+                if "emergency_exit" in lower:
+                    caller = "EMERGENCY_EXIT"; break
+                if "ai_exit" in lower:
+                    caller = "AI_EXIT"; break
+                if "exit_manager" in lower:
+                    caller = "EXIT_MANAGER"; break
+                if "smart_position" in lower:
+                    caller = "SMART_POSITION"; break
+                if "time_exit" in lower:
+                    caller = "TIME_EXIT"; break
+                if "close_partial" in lower:
+                    caller = "CLOSE_PARTIAL"; break
+                if "dashboard_manual" in lower or "api_position_close" in lower:
+                    caller = "DASHBOARD_MANUAL"; break
+                if "recovery" in lower:
+                    caller = "RECOVERY"; break
+                if "telegram_closeall" in lower:
+                    caller = "TELEGRAM_CLOSEALL"; break
+                if "close_all" in lower or "close_pos1" in lower:
+                    caller = "SCRIPT"; break
+        if not caller:
+            caller = "UNKNOWN"
         with open("runtime/close_trace.log", "a") as f:
             f.write(f"CALLER={caller}\n")
 
@@ -92,7 +103,7 @@ class PositionController:
 
             "magic": 10001,
 
-            "comment": "DLineBot CLOSE",
+            "comment": f"{caller} CLOSE",
 
             "type_time": mt5.ORDER_TIME_GTC,
 
