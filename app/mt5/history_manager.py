@@ -16,7 +16,7 @@ class HistoryManager:
     # Get Today Closed Trades
     # =====================================
 
-    def _today_exits(self):
+    def _today_exits(self, symbol=None):
 
         MT5Session.ensure_connection()
 
@@ -40,11 +40,12 @@ class HistoryManager:
             d for d in deals
             if d.type in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL)
             and d.entry == mt5.DEAL_ENTRY_OUT
+            and (symbol is None or d.symbol == symbol)
         ]
 
         return list(exits)
 
-    def today(self):
+    def today(self, symbol=None):
 
         MT5Session.ensure_connection()
 
@@ -68,18 +69,19 @@ class HistoryManager:
             d for d in deals
             if d.type in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL)
             and d.entry == DEAL_ENTRY_IN
+            and (symbol is None or d.symbol == symbol)
         ]
 
         return list(trades)
 
-    def today_exits(self):
+    def today_exits(self, symbol=None):
 
-        return self._today_exits()
+        return self._today_exits(symbol)
 
-    def summary(self):
+    def summary(self, symbol=None):
 
-        entries = self.today()
-        exits = self._today_exits()
+        entries = self.today(symbol)
+        exits = self._today_exits(symbol)
 
         trade = len(entries)
 

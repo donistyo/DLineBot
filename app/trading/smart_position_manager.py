@@ -15,7 +15,7 @@ class SmartPositionManager:
         # Track recently closed positions for re-entry
         self._recent_closes = []
 
-        self.levels = levels or [
+        self.levels = levels if levels is not None else [
             {"profit": 4.5, "action": "SCALE_OUT",       "label": "Close 70%",       "close_pct": 70},
             {"profit": 9,   "action": "BREAK_EVEN",      "label": "Break Even"},
             {"profit": 13.5,"action": "CLOSE",            "label": "Close Sisa"},

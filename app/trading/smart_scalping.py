@@ -5,10 +5,12 @@ from datetime import datetime
 
 class SmartScalpingEngine:
 
-    def __init__(self):
+    def __init__(self, symbol="XAUUSDc", direction_tf="M5"):
         self._last_5 = None
         self._prev_high = None
         self._prev_low = None
+        self.symbol = symbol
+        self.direction_tf = direction_tf
 
     def analyze(self, df, last):
 
@@ -23,8 +25,13 @@ class SmartScalpingEngine:
 
         # =====================================
         # 1. Momentum Engine
+        #    Arah sinyal utama diambil dari timeframe lebih besar (M5
+        #    default) supaya arah market terbaca lebih stabil, bukan hanya
+        #    dari 3 candle M1 yang noise. M1 dipakai engine lain utk timing.
+        #    Fallback ke M1 jika data timeframe besar tidak tersedia.
         # =====================================
-        momentum = self._momentum(candles)
+        momentum = self._momentum_htf() or self._momentum(candles)
+        momentum["tf"] = self.direction_tf
         result["momentum"] = momentum
 
         # =====================================
@@ -68,6 +75,32 @@ class SmartScalpingEngine:
     # =====================================
     # 1. Momentum Engine
     # =====================================
+
+    def _momentum_htf(self, bars=10):
+        try:
+            import MetaTrader5 as mt5
+            tf_map = {
+                "M1": mt5.TIMEFRAME_M1,
+                "M5": mt5.TIMEFRAME_M5,
+                "M15": mt5.TIMEFRAME_M15,
+                "M30": mt5.TIMEFRAME_M30,
+                "H1": mt5.TIMEFRAME_H1,
+                "H4": mt5.TIMEFRAME_H4,
+                "D1": mt5.TIMEFRAME_D1,
+            }
+            tf = tf_map.get(self.direction_tf)
+            if tf is None:
+                return None
+            rates = mt5.copy_rates_from_pos(self.symbol, tf, 0, bars)
+            if rates is None or len(rates) < 3:
+                return None
+            import pandas as _pd
+            htf = _pd.DataFrame(rates)
+            htf["open"] = htf["open"].astype(float)
+            htf["close"] = htf["close"].astype(float)
+            return self._momentum(htf)
+        except Exception:
+            return None
 
     def _momentum(self, candles):
         if len(candles) < 3:

@@ -1,7 +1,8 @@
 class DecisionEngine:
 
-    def __init__(self, min_scalp_score=25):
+    def __init__(self, min_scalp_score=55):
         self.min_scalp_score = min_scalp_score
+        self.sideways_penalty = 15
         self.trend_map = {"UP": "BUY", "DOWN": "SELL", "SIDEWAYS": None}
 
     def decide(self, prediction=None, scalp_result=None, regime=None) -> dict:
@@ -33,6 +34,18 @@ class DecisionEngine:
 
         trend = regime.get("trend", "SIDEWAYS") if regime else "SIDEWAYS"
         expected_dir = self.trend_map.get(trend)
+
+        # Saat trend tidak jelas (SIDEWAYS/RANGING), butuh skor lebih tinggi
+        # supaya hanya sinyal kuat yang masuk, mengurangi risiko chop.
+        if expected_dir is None:
+            if score < self.min_scalp_score + self.sideways_penalty:
+                return {
+                    "action": "NO_TRADE",
+                    "reason": f"Trend SIDEWAYS, butuh skor >= {self.min_scalp_score + self.sideways_penalty} (dapat {score}/100 {grade})",
+                    "confidence": score / 100,
+                    "score": score,
+                    "grade": grade
+                }
 
         if expected_dir and direction != expected_dir:
             return {

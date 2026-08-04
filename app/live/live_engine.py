@@ -22,6 +22,7 @@ from app.mt5.account_manager import AccountManager
 from app.config.features import FEATURE_COLUMNS
 from app.config.settings import DASHBOARD_URL
 from app.config.settings import TRADE_LOT_SIZE, BROKER
+from app.config.settings import get_symbol_params, is_crypto_symbol, get_model_prefix
 
 from app.logger.trade_logger import TradeLogger
 
@@ -33,6 +34,8 @@ from app.live.market_info import MarketInfo
 from app.live.auto_trader_view import AutoTraderView
 
 from app.mt5.session import MT5Session
+
+import MetaTrader5 as mt5
 
 from app.trading.position_monitor import PositionMonitor
 
@@ -65,6 +68,8 @@ from app.live.emergency_exit_view import EmergencyExitView
 from app.live.recovery_exit_view import RecoveryExitView
 from app.mt5.position_controller import PositionController, _log_close
 from app.trading.smart_scalping import SmartScalpingEngine
+from app.trading.atr_helper import ATRHelper
+from app.trading.atr_protection import ATRProtectionManager
 from app.live.smart_scalping_view import SmartScalpingView
 from app.trading.performance_manager import PerformanceManager
 from app.live.performance_view import PerformanceView
@@ -130,7 +135,8 @@ class LiveEngine:
 
         self.loader = ModelLoader()
 
-        model_name = "xgboost_xauusd_m1.joblib" if mode == "scalp" else "xgboost_xauusd_h1.joblib"
+        model_prefix = get_model_prefix(self.symbol)
+        model_name = f"xgboost_{model_prefix}_m1.joblib" if mode == "scalp" else f"xgboost_{model_prefix}_h1.joblib"
         self.model = self.loader.load(model_name)
 
         self.predictor = Predictor(
@@ -174,8 +180,18 @@ class LiveEngine:
                 sl_points = 6
                 min_atr_val = 0.5
 
+        # =====================================
+        # Per-Symbol Overrides
+        # =====================================
+
+        _sym_params = get_symbol_params(self.symbol)
+        if _sym_params:
+            max_spread = _sym_params.get("max_spread", max_spread)
+            min_atr_val = _sym_params.get("min_atr", min_atr_val)
+            _s_start, _s_end = _sym_params.get("session", (0, 23))
+
         self.decision_engine = DecisionEngine(
-            min_scalp_score=30
+            min_scalp_score=55
         )
 
         self.risk_manager = RiskManager(
@@ -199,14 +215,29 @@ class LiveEngine:
 
         self.account_manager = AccountManager()
 
+        from app.config.settings import load_trade_config, get_trade_config
+        load_trade_config()
+        _cfg_windows = get_trade_config("session_windows")
+        if isinstance(_cfg_windows, list) and _cfg_windows:
+            _s_start, _s_end = tuple(_cfg_windows[0])[:2]
+            _session_windows = _cfg_windows
+        else:
+            _session_windows = [(23, 12)]  # Asia + awal London, NY off
+
         self.trade_filter = TradeFilter(
             max_spread=max_spread,
             min_atr=min_atr_val,
-            start_hour=0,
-            end_hour=23
+            start_hour=_s_start,
+            end_hour=_s_end,
+            windows=_session_windows
         )
 
         max_pos = 10 if TRADE_LOT_SIZE <= 0.01 else 3
+        from app.config.settings import load_trade_config, get_trade_config
+        load_trade_config()
+        _cfg_positions = get_trade_config("max_positions")
+        if _cfg_positions:
+            max_pos = int(_cfg_positions)
         self.position_filter = PositionFilter(max_positions=max_pos)
 
         self.session_manager = SessionManager(max_sessions=10, max_per_session=10)
@@ -236,9 +267,9 @@ class LiveEngine:
                     self._recovery_seen[p.ticket] = True
 
         if mode == "scalp":
-            be_trigger = 999.0
-            trail_activation = 3.0
-            trail_distance = 1.5
+            be_trigger = 2.0
+            trail_activation = 1.5
+            trail_distance = 1.0
             exit_min_conf = 1.0
             daily_max_trade = 100
             daily_max_loss = -100
@@ -256,6 +287,29 @@ class LiveEngine:
             daily_max_trade = 20
             daily_max_loss = -500
 
+        # Override dari runtime/trade_config.json (mis. uji coba)
+        from app.config.settings import load_trade_config, get_trade_config
+        load_trade_config()
+        _cfg_max_trade = get_trade_config("max_trade")
+        if _cfg_max_trade:
+            daily_max_trade = int(_cfg_max_trade)
+
+        self.atr_protection = ATRProtectionManager(
+            sl_atr_mult=float(get_trade_config("sl_atr_mult", 1.5)),
+            be_trigger_atr=float(get_trade_config("be_trigger_atr", 0.5)),
+            partial_trigger_atr=float(get_trade_config("partial_trigger_atr", 1.0)),
+            partial_pct=float(get_trade_config("partial_pct", 0.5)),
+            trail_activation_atr=float(get_trade_config("trail_activation_atr", 1.5)),
+            trail_distance_atr=float(get_trade_config("trail_distance_atr", 1.0)),
+            lock_profit_atr=float(get_trade_config("lock_profit_atr", 2.0)),
+            lock_amount_atr=float(get_trade_config("lock_amount_atr", 0.5)),
+            tp_atr=float(get_trade_config("tp_atr", 4.0)),
+            emergency_atr=float(get_trade_config("emergency_atr", 2.5)),
+            partial_close=bool(get_trade_config("partial_close", False)),
+            early_tp_atr=float(get_trade_config("early_tp_atr", 0.65)),
+            early_pullback_atr=float(get_trade_config("early_pullback_atr", 0.25)),
+        )
+
         self.break_even = BreakEvenManager(
             trigger_profit=be_trigger
         )
@@ -270,10 +324,7 @@ class LiveEngine:
         )
 
         if mode == "scalp":
-            sp_levels = [
-                {"profit": 3,   "action": "BREAK_EVEN",      "label": "Break Even"},
-                {"profit": 4,   "action": "CLOSE",           "label": "Ambil Profit 4+"},
-            ]
+            sp_levels = []
         else:
             sp_levels = None
 
@@ -313,14 +364,21 @@ class LiveEngine:
             max_drawdown=max_dd
         )
 
-        news_country = [self.symbol[-3:]]
-        self.news_filter = NewsFilter(countries=news_country)
+        if is_crypto_symbol(self.symbol):
+            news_country = []
+            self.news_filter = None
+            print(f"[SYMBOL] {self.symbol} adalah kripto - News Filter dinonaktifkan (24/7 market).")
+        else:
+            news_country = [self.symbol[-3:]]
+            self.news_filter = NewsFilter(countries=news_country)
 
         self.regime = MarketRegimeDetector()
 
         self.trade_scorer = TradeScorer()
 
-        self.smart_scalping = SmartScalpingEngine()
+        self.smart_scalping = SmartScalpingEngine(symbol=symbol)
+
+        self.atr_helper = ATRHelper(symbol=symbol, timeframe=mt5.TIMEFRAME_M5)
 
         time_exit_minutes = 9999
         self.time_exit = TimeExit(
@@ -348,7 +406,8 @@ class LiveEngine:
             symbol=symbol,
             primary_tf=timeframe,
             higher_tfs=["M5", "M15"] if mode == "scalp" else ["H4", "D1"],
-            bars=bars
+            bars=bars,
+            min_adx=float(get_trade_config("min_adx", 30)),
         )
 
         self.confidence = ConfidenceManager(
@@ -389,7 +448,14 @@ class LiveEngine:
         self.last_fundamental_trade_time = None
         self.daily_fundamental = RealFundamentalEngine(cache_minutes=15)
 
+        self._last_closed_direction = None
+        self._last_closed_time = None
+        self._seen_tickets = set()
+        self._consecutive_losses = 0
+        self._score_penalty = 0
+
         self.fundamental_trader.engine = self.daily_fundamental
+        self.fundamental_trader.multi_tf = self.multi_tf
 
         print()
         print("=" * 60)
@@ -693,7 +759,7 @@ class LiveEngine:
                 # -------------------------------------------------
                 # 15-Minute Fundamental Trade Execution
                 # -------------------------------------------------
-                ft_result = self.fundamental_trader.execute()
+                ft_result = self.fundamental_trader.execute(regime=regime)
                 if ft_result and ft_result["status"] not in ("SKIPPED", "ERROR"):
                     print()
                     print("=" * 60)
@@ -750,6 +816,8 @@ class LiveEngine:
             # Decision
             # ===============================
 
+            self.decision_engine.min_scalp_score = self._current_min_score()
+
             decision = self.decide(
                 prediction,
                 scalp_result,
@@ -759,6 +827,12 @@ class LiveEngine:
             DecisionView.show(
                 decision
             )
+
+            if decision.get("action") in ("BUY", "SELL"):
+                tf_confirmation = self.multi_tf.confirm(
+                    prediction, last, signal=decision["action"]
+                )
+                MultiTFView.show(tf_confirmation)
 
             # ===============================
             # Proposed Trade
@@ -794,7 +868,7 @@ class LiveEngine:
             # Daily Risk
             # ===============================
 
-            daily_result = self.daily_risk.allow()
+            daily_result = self.daily_risk.allow(symbol=self.symbol)
             DailyRiskView.show(daily_result)
 
             if not daily_result["allowed"] and "Batas trade harian" in daily_result.get("reason", ""):
@@ -822,7 +896,14 @@ class LiveEngine:
                     _lot = json.load(_f).get("lot_size", TRADE_LOT_SIZE)
             except:
                 _lot = TRADE_LOT_SIZE
-            self.position_filter.max_positions = 5 if _lot <= 0.01 else 3
+
+            from app.config.settings import load_trade_config, get_trade_config
+            load_trade_config()
+            _cfg_positions = get_trade_config("max_positions")
+            if _cfg_positions:
+                self.position_filter.max_positions = int(_cfg_positions)
+            else:
+                self.position_filter.max_positions = 5 if _lot <= 0.01 else 3
 
             position_result = self.position_filter.allow(
                 self.symbol,
@@ -843,9 +924,12 @@ class LiveEngine:
             # News Filter
             # ===============================
 
-            news_result = self.news_filter.allow()
-
-            NewsFilterView.show(news_result)
+            news_result = None
+            if self.news_filter is not None:
+                news_result = self.news_filter.allow()
+                NewsFilterView.show(news_result)
+            else:
+                news_result = {"allowed": True, "reason": "Kripto: news filter off.", "news": None}
 
             # ===============================
             # Smart Position Manager
@@ -855,19 +939,49 @@ class LiveEngine:
                 self.symbol
             )
 
-            if positions:
-                active_tickets = {p.ticket for p in positions}
+            active_tickets = {p.ticket for p in positions} if positions else set()
+            closed_tickets = self._seen_tickets - active_tickets
+            if closed_tickets:
+                self._last_closed_direction = self._ticket_direction(closed_tickets)
+                self._last_closed_time = datetime.now()
+                self._track_consecutive_losses(closed_tickets)
+            self._seen_tickets = active_tickets
 
+            if positions:
                 self.time_exit.cleanup(active_tickets)
                 self.ai_exit.cleanup(active_tickets)
+                self.atr_protection.cleanup(active_tickets)
 
                 for position in positions:
 
-                    be_result = self.break_even.process(position)
-                    ExitView.show(be_result)
+                    _use_atr_mode = True
+                    try:
+                        with open("runtime/trade_config.json") as _f:
+                            _use_atr_mode = bool(json.load(_f).get("use_atr_protection", True))
+                    except Exception:
+                        pass
 
-                    ts_result = self.trailing.process(position)
-                    ExitView.show(ts_result)
+                    if _use_atr_mode:
+                        _atr_now = float(last.get("ATR", 0) or 0)
+                        _atr_m5 = float(self.atr_helper.current_atr())
+                        if _atr_m5 > 0:
+                            _atr_now = _atr_m5
+                        ap_result = self.atr_protection.process(
+                            position, _atr_now, float(last["close"])
+                        )
+                        ExitView.show(ap_result)
+                        if ap_result["status"] in ("CLOSED", "PARTIAL"):
+                            continue
+                    else:
+                        attach_sltp_result = self._attach_sl_tp_on_profit(position)
+                        if attach_sltp_result:
+                            ExitView.show(attach_sltp_result)
+
+                        be_result = self.break_even.process(position)
+                        ExitView.show(be_result)
+
+                        ts_result = self.trailing.process(position)
+                        ExitView.show(ts_result)
 
                     exit_result = self.exit_manager.process(
                         position,
@@ -955,6 +1069,18 @@ class LiveEngine:
             except:
                 pass
 
+            reentry_reason = self._reentry_blocked(decision["action"], cooldown_minutes=15)
+
+            _atr_filter_ok = True
+            _atr_filter_reason = None
+            try:
+                with open("runtime/trade_config.json") as _f:
+                    _vol_filter_on = bool(json.load(_f).get("atr_volatility_filter", True))
+                if _vol_filter_on:
+                    _atr_filter_ok, _atr_filter_reason = self.atr_helper.volatility_ok()
+            except Exception:
+                pass
+
             can_trade = (
 
                 self._auto_trade_enabled
@@ -968,6 +1094,12 @@ class LiveEngine:
                 and daily_result["allowed"]
 
                 and position_result["allowed"]
+
+                and (tf_confirmation.get("allowed", False) if tf_confirmation else True)
+
+                and not reentry_reason
+
+                and _atr_filter_ok
 
             )
 
@@ -992,25 +1124,40 @@ class LiveEngine:
             if risk:
                 try:
                     with open("runtime/trade_config.json") as _f:
-                        risk["lot_size"] = json.load(_f).get("lot_size", TRADE_LOT_SIZE)
+                        _cfg = json.load(_f)
+                        risk["lot_size"] = _cfg.get("lot_size", TRADE_LOT_SIZE)
+                        _use_atr = bool(_cfg.get("use_atr_protection", True))
+                        _sl_atr_mult = float(_cfg.get("sl_atr_mult", 1.5))
                 except:
                     risk["lot_size"] = TRADE_LOT_SIZE
-                risk["sl_points"] = 6.0
-                spread_price = float(last.get("spread", 0)) * 0.01
+                    _use_atr = True
+                    _sl_atr_mult = 1.5
+                _sp = get_symbol_params(self.symbol)
+                _sl_pts = float(_sp.get("sl_points", 6.0))
+                _tp1_pts = float(_sp.get("tp1_points", _sl_pts * 1.5))
+                _sl_dist = _sl_pts * float(_sp.get("point", 0.01))
+                _tp_dist = _tp1_pts * float(_sp.get("point", 0.01))
+                _atr_now = float(last.get("ATR", 0) or 0)
+                _atr_m5 = float(self.atr_helper.current_atr())
+                if _atr_m5 > 0:
+                    _atr_now = _atr_m5
+                if _use_atr and _atr_now > 0:
+                    _sl_dist = _atr_now * _sl_atr_mult
+                    _tp_dist = 0.0
+                    risk["atr"] = _atr_now
+                    risk["sl_atr"] = _sl_atr_mult
                 if decision["action"] == "BUY":
-                    ask_price = risk["entry_price"] + spread_price / 2
-                    risk["stop_loss"] = 0.0
-                    risk["take_profit"] = 0.0
+                    risk["stop_loss"] = round(risk["entry_price"] - _sl_dist, 5)
+                    risk["take_profit"] = round(risk["entry_price"] + _tp_dist, 5) if _tp_dist > 0 else 0.0
                 elif decision["action"] == "SELL":
-                    bid_price = risk["entry_price"] - spread_price / 2
-                    risk["stop_loss"] = 0.0
-                    risk["take_profit"] = 0.0
+                    risk["stop_loss"] = round(risk["entry_price"] + _sl_dist, 5)
+                    risk["take_profit"] = round(risk["entry_price"] - _tp_dist, 5) if _tp_dist > 0 else 0.0
 
             # ===============================
             # AI Trade Score
             # ===============================
 
-            news_data = news_result.get("news") if hasattr(self, 'news_filter') else None
+            news_data = news_result.get("news") if self.news_filter is not None else None
 
             trade_score = self.trade_scorer.score(
                 prediction=prediction,
@@ -1104,6 +1251,36 @@ class LiveEngine:
 
                 }
 
+            elif tf_confirmation and not tf_confirmation.get("allowed", False):
+
+                result = {
+
+                    "status": "BLOCKED",
+
+                    "reason": tf_confirmation.get("reason", "Higher TF menolak.")
+
+                }
+
+            elif reentry_reason:
+
+                result = {
+
+                    "status": "BLOCKED",
+
+                    "reason": reentry_reason
+
+                }
+
+            elif not _atr_filter_ok:
+
+                result = {
+
+                    "status": "BLOCKED",
+
+                    "reason": _atr_filter_reason or "Filter volatilitas ATR menolak."
+
+                }
+
             else:
 
                 result = self.auto_trader.execute(
@@ -1131,7 +1308,7 @@ class LiveEngine:
                         "multitf_ok": tf_confirmation.get("aligned", False) if tf_confirmation else False,
                         "atr_ok": filter_result.get("allowed", False),
                         "spread_ok": filter_result.get("allowed", False),
-                        "news_ok": not news_result.get("news") if hasattr(self, 'news_filter') else True,
+                        "news_ok": not news_result.get("news") if self.news_filter is not None else True,
                     }
                 )
 
@@ -1258,6 +1435,7 @@ class LiveEngine:
                 "daily_risk": "OK" if daily_result["allowed"] else "NG",
                 "drawdown": "OK" if drawdown_result["allowed"] else "NG",
                 "auto_trader": result.get("status", "READY"),
+                "auto_trader_reason": result.get("reason", ""),
                 "learning": f"{lr_stats['total']} ({lr_stats['win_rate']}%)",
                 "reason": decision.get("reason", ""),
                 "scalp_grade": decision.get("grade", "-")
@@ -1334,6 +1512,7 @@ class LiveEngine:
                 "trade": dash_data["trade"],
                 "score": dash_data["score"],
                 "reason": dash_data.get("reason", ""),
+                "auto_trader_reason": dash_data.get("auto_trader_reason", ""),
                 "scalp_grade": dash_data.get("scalp_grade", "-"),
                 "open_positions": open_positions,
                 "open_count": len(open_positions),
@@ -1394,6 +1573,15 @@ class LiveEngine:
         ticket = position.ticket
         profit = position.profit
 
+        if position.sl == 0 and position.tp == 0:
+            if profit <= -15.0:
+                _log_close("PROTECTIVE", ticket, position.symbol, profit)
+                result = self.controller.close(position, caller="PROTECTIVE")
+                return {"status": "CLOSED", "action": "PROTECTIVE",
+                        "reason": f"Posisi tanpa SL/TP turun ke {profit:.2f} (proteksi).",
+                        "ticket": ticket, "result": result}
+            return None
+
         if profit < -15.0:
             self._recovery_seen[ticket] = True
             return None
@@ -1407,6 +1595,102 @@ class LiveEngine:
                     "ticket": ticket, "result": result}
 
         return None
+
+    # =====================================
+    # Attach SL/TP on Profit
+    # =====================================
+
+    def _attach_sl_tp_on_profit(self, position):
+        try:
+            with open("runtime/trade_config.json") as _f:
+                _cfg = json.load(_f)
+                if not bool(_cfg.get("entry_without_sl_tp", False)):
+                    return None
+                _trigger = float(_cfg.get("attach_profit_trigger", 0.5))
+        except Exception:
+            return None
+
+        if position.sl != 0 or position.tp != 0:
+            return None
+
+        if position.profit < _trigger:
+            return {"status": "WAITING", "action": "NONE",
+                    "reason": f"Profit belum {_trigger:.1f} ({position.profit:.2f})."}
+
+        _sp = get_symbol_params(self.symbol)
+        _sl_pts = float(_sp.get("sl_points", 6.0))
+        _tp1_pts = float(_sp.get("tp1_points", _sl_pts * 1.5))
+        _point = float(_sp.get("point", 0.01))
+        _tp_dist = _tp1_pts * _point
+
+        if position.type == 0:
+            _sl = round(position.price_open, 5)
+            _tp = round(position.price_open + _tp_dist, 5)
+        else:
+            _sl = round(position.price_open, 5)
+            _tp = round(position.price_open - _tp_dist, 5)
+
+        result = self.controller.modify_sl_tp(position, _sl, _tp)
+        return {"status": "UPDATED" if result.get("success") else "FAILED",
+                "action": "ATTACH_SLTP",
+                "reason": f"Pasang SL/TP saat profit +{position.profit:.2f}.",
+                "new_stop_loss": _sl, "new_take_profit": _tp, "result": result}
+
+    # =====================================
+    # Re-entry Protection
+    # =====================================
+
+    def _ticket_direction(self, tickets):
+        try:
+            if not tickets:
+                return None
+            ticket = sorted(tickets)[-1]
+            deals = mt5.history_deals_get(position=ticket) if hasattr(mt5, "history_deals_get") else None
+            if deals:
+                for d in deals:
+                    if d.entry == mt5.DEAL_ENTRY_IN:
+                        return "BUY" if d.type == mt5.DEAL_TYPE_BUY else "SELL"
+        except Exception:
+            pass
+        return None
+
+    def _reentry_blocked(self, decision_action, cooldown_minutes=15):
+        if not self._last_closed_direction or not self._last_closed_time:
+            return None
+        if decision_action != self._last_closed_direction:
+            return None
+        if (datetime.now() - self._last_closed_time).total_seconds() / 60 > cooldown_minutes:
+            return None
+        return f"Hindari re-entry arah sama: posisi {self._last_closed_direction} baru saja ditutup."
+
+    # =====================================
+    # Circuit Breaker Skor
+    # =====================================
+
+    def _track_consecutive_losses(self, closed_tickets):
+        try:
+            total_profit = 0.0
+            for ticket in sorted(closed_tickets):
+                deals = mt5.history_deals_get(position=ticket) if hasattr(mt5, "history_deals_get") else None
+                if not deals:
+                    continue
+                for d in deals:
+                    if d.entry == mt5.DEAL_ENTRY_OUT:
+                        total_profit += d.profit
+            if total_profit < 0:
+                self._consecutive_losses += 1
+            else:
+                self._consecutive_losses = 0
+        except Exception:
+            pass
+
+        if self._consecutive_losses >= 3:
+            self._score_penalty = 10
+        elif self._consecutive_losses == 0:
+            self._score_penalty = 0
+
+    def _current_min_score(self):
+        return 55 + self._score_penalty
 
     # =====================================
     # Stop Engine

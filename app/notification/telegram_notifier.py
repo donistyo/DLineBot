@@ -265,8 +265,11 @@ class TelegramNotifier:
             f"\U0001f4c9 Drawdown  {dash_data['drawdown']}\n"
             f"\U0001f916 AutoTrade {dash_data['auto_trader']}\n"
             f"\U0001f4d6 Learning  {dash_data.get('learning', '-')}\n"
-            f"\n"
         )
+
+        at_reason = dash_data.get("auto_trader_reason", "")
+        if dash_data["auto_trader"] == "BLOCKED" and at_reason:
+            text += f"\n\u26a0\ufe0f Alasan BLOCK: {at_reason}\n"
 
         if dashboard_url:
             text += f"\U0001f310 Dashboard : {dashboard_url}\n"

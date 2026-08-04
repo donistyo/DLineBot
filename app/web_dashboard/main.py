@@ -129,6 +129,20 @@ def get_cached_positions(symbol=None):
         return list(_mt5_cache["positions"])
 
 
+# =====================================
+# Engine symbol switching hook
+# =====================================
+
+def _engine_restart_symbol():
+    """Tandai runner agar restart engine dengan simbol aktif terbaru."""
+    try:
+        Path("runtime").mkdir(exist_ok=True)
+        with open("runtime/engine_restart.json", "w") as f:
+            json.dump({"requested": True, "ts": time.time()}, f)
+    except Exception:
+        pass
+
+
 def get_cached_pending(symbol=None):
     with _mt5_lock:
         if symbol:
@@ -154,7 +168,7 @@ _indicator_engine = IndicatorEngine()
 def save_trade_features(ticket, signal, confidence):
     try:
         import MetaTrader5 as mt5
-        rates = mt5.copy_rates_from_pos("XAUUSDc", mt5.TIMEFRAME_M1, 0, 2000)
+        rates = mt5.copy_rates_from_pos(_active_symbol(), mt5.TIMEFRAME_M1, 0, 2000)
         if rates is None or len(rates) < 200:
             return False
         df = pd.DataFrame(rates)
@@ -284,6 +298,7 @@ def get_overview():
         "margin": 0, "margin_free": 0, "margin_level": 0,
         "server_time": str(datetime.now()),
         "signal": "-", "confidence": 0, "trade": "NO", "score": "-",
+        "reason": "", "auto_trader_reason": "",
         "open_positions": [], "open_count": 0,
         "trades_today": 0, "profit_today": 0,
         "trades": [], "equity_snapshots": [],
@@ -404,7 +419,9 @@ def api_model_version():
 
 @app.get("/api/live-market")
 def api_live_market():
-    symbols = ["XAUUSDc"]
+    from app.mt5.account_store import get_active_account, get_account_symbols
+    login = get_active_account().get("login")
+    symbols = get_account_symbols(login)
     out = []
     for sym in symbols:
         try:
@@ -425,9 +442,17 @@ def api_live_market():
 # Manual Order API
 # =====================================
 
+def _active_symbol():
+    try:
+        from app.mt5.account_store import get_active_symbol
+        return get_active_symbol()
+    except Exception:
+        return "XAUUSDc"
+
+
 @app.post("/api/order/manual")
 def api_manual_order(data: dict):
-    symbol = data.get("symbol", "XAUUSDc")
+    symbol = data.get("symbol") or _active_symbol()
     signal = data.get("signal", "BUY").upper()
     volume = float(data.get("volume", 0.01))
     entry = float(data["entry"]) if data.get("entry") else None
@@ -449,7 +474,7 @@ def api_manual_order(data: dict):
 
 @app.post("/api/order/dry-run")
 def api_dry_run(data: dict):
-    symbol = data.get("symbol", "XAUUSDc")
+    symbol = data.get("symbol") or _active_symbol()
     signal = data.get("signal", "BUY").upper()
     volume = float(data.get("volume", 0.01))
     entry = float(data["entry"]) if data.get("entry") else None
@@ -509,7 +534,7 @@ def api_get_parted_orders(limit: int = 20):
 
 @app.post("/api/grid/place")
 def api_grid_place(data: dict):
-    symbol = data.get("symbol", "XAUUSDc")
+    symbol = data.get("symbol") or _active_symbol()
     layers = int(data.get("layers", 3))
     spacing = float(data.get("spacing", 2.0))
     lot = float(data.get("lot", 0.01))
@@ -550,7 +575,7 @@ def api_grid_place(data: dict):
 
 @app.post("/api/grid/cancel")
 def api_grid_cancel(data: dict):
-    symbol = data.get("symbol", "XAUUSDc")
+    symbol = data.get("symbol") or _active_symbol()
     dry_run = data.get("dry_run", False)
 
     mgr = PendingOrderManager(dry_run=dry_run)
@@ -560,7 +585,7 @@ def api_grid_cancel(data: dict):
 
 @app.get("/api/grid/status")
 def api_grid_status():
-    symbol = "XAUUSDc"
+    symbol = _active_symbol()
     pending = get_cached_pending(symbol)
     positions = get_cached_positions(symbol)
     return {
@@ -581,7 +606,7 @@ def api_chart_candles():
         MT5Session.connect()
         from_ts = int((datetime.now() - timedelta(hours=12)).timestamp())
         to_ts = int(datetime.now().timestamp())
-        rates = mt5.copy_rates_range("XAUUSDc", mt5.TIMEFRAME_M1, from_ts, to_ts)
+        rates = mt5.copy_rates_range(_active_symbol(), mt5.TIMEFRAME_M1, from_ts, to_ts)
         if rates is not None:
             n = len(rates)
             for i in range(max(0, n - 200), n):
@@ -597,7 +622,7 @@ def api_chart_candles():
         import traceback
         with open("runtime/chart_error.log","a") as fe:
             fe.write(f"{datetime.now()} {e}\n{traceback.format_exc()}\n")
-    return {"candles": candles, "count": len(candles)}
+    return {"candles": candles, "count": len(candles), "symbol": _active_symbol()}
 
 # =====================================
 # Intraday API
@@ -748,8 +773,9 @@ def api_scalping():
 @app.get("/api/auto-trade/monitor")
 def api_auto_trade_monitor():
     account = get_cached_account()
-    positions = get_cached_positions("XAUUSDc")
-    pending = get_cached_pending("XAUUSDc")
+    symbol = _active_symbol()
+    positions = get_cached_positions(symbol)
+    pending = get_cached_pending(symbol)
     scalp_raw = {"score": 0, "grade": "-", "direction": "NEUTRAL", "action": "WAIT"}
     try:
         with open("runtime/scalping.json") as f:
@@ -781,13 +807,20 @@ def api_auto_trade_monitor():
         _lot = 0.01
     _lot_opts = [0.01, 0.02, 0.03, 0.05, 0.10, 0.20, 0.50, 1.0]
 
+    _enabled = _AUTO_TRADE_ENABLED
+    try:
+        with open("runtime/auto_trade_enabled.json") as _f:
+            _enabled = json.load(_f).get("enabled", True)
+    except:
+        pass
+
     return {
         "account": {"balance": account.get("balance", 0), "equity": account.get("equity", 0)},
         "scalp": scalp_raw,
         "positions": pos_out,
         "pending_orders": pending,
         "last_update": time.strftime("%H:%M:%S"),
-        "auto_trade_enabled": _AUTO_TRADE_ENABLED,
+        "auto_trade_enabled": _enabled,
         "lot_size": _lot,
         "lot_options": _lot_opts,
     }
@@ -813,8 +846,11 @@ def api_auto_trade_get_enabled():
 def api_auto_trade_enable():
     global _AUTO_TRADE_ENABLED
     from app.trading.daily_risk_manager import DailyRiskManager
-    drm = DailyRiskManager(max_trade=20, max_daily_loss=-500, max_daily_profit=9999)
-    dr = drm.allow()
+    from app.config.settings import load_trade_config, get_trade_config
+    load_trade_config()
+    max_trade = get_trade_config("max_trade") or 20
+    drm = DailyRiskManager(max_trade=int(max_trade), max_daily_loss=-500, max_daily_profit=9999)
+    dr = drm.allow(symbol=_active_symbol())
     warning = None
     if not dr["allowed"]:
         warning = dr["reason"]
@@ -864,7 +900,7 @@ def api_set_lot_size(data: dict):
 
 @app.get("/api/account/status")
 def api_account_status():
-    from app.mt5.account_store import get_active_account
+    from app.mt5.account_store import get_active_account, get_active_symbol, get_account_symbols
     if not MT5Session.is_connected():
         MT5Session.connect()
     info = {}
@@ -883,15 +919,18 @@ def api_account_status():
     except Exception:
         pass
     cfg = get_active_account()
+    login = cfg.get("login") or (info.get("login") if info else None)
     return {
         "connected": MT5Session.is_connected(),
         "account": info,
         "active_config": cfg,
+        "symbol": get_active_symbol(),
+        "symbols": get_account_symbols(login),
     }
 
 @app.post("/api/account/login")
 def api_account_login(data: dict):
-    from app.mt5.account_store import set_active_account, get_active_account
+    from app.mt5.account_store import set_active_account, get_active_account, get_account_symbols
     login = str(data.get("login", "")).strip()
     password = str(data.get("password", "")).strip()
     server = str(data.get("server", "")).strip()
@@ -931,7 +970,13 @@ def api_account_login(data: dict):
             "currency": acc.currency,
             "leverage": acc.leverage,
         }
-    return {"success": True, "account": info}
+    _engine_restart_symbol()
+    return {
+        "success": True,
+        "account": info,
+        "symbol": get_active_account().get("symbol", "XAUUSDc"),
+        "symbols": get_account_symbols(login),
+    }
 
 @app.post("/api/account/set-enabled")
 def api_account_set_enabled(data: dict):
@@ -977,7 +1022,7 @@ def api_account_saved_delete(name: str):
 
 @app.post("/api/account/saved/{name}/switch")
 def api_account_saved_switch(name: str):
-    from app.mt5.account_store import find_saved_account, set_active_account, get_active_account
+    from app.mt5.account_store import find_saved_account, set_active_account, get_active_account, get_account_symbols
     saved = find_saved_account(name)
     if not saved:
         return {"success": False, "error": f"Akun '{name}' tidak ditemukan"}
@@ -1011,7 +1056,32 @@ def api_account_saved_switch(name: str):
             "currency": acc.currency,
             "leverage": acc.leverage,
         }
-    return {"success": True, "account": info}
+    _engine_restart_symbol()
+    return {
+        "success": True,
+        "account": info,
+        "symbol": get_active_account().get("symbol", "XAUUSDc"),
+        "symbols": get_account_symbols(saved["login"]),
+    }
+
+
+@app.post("/api/account/symbol")
+def api_account_symbol(data: dict):
+    from app.mt5.account_store import set_active_symbol, get_active_account, get_account_symbols
+    symbol = str(data.get("symbol", "")).strip()
+    if not symbol:
+        return {"success": False, "error": "Symbol wajib diisi"}
+
+    login = get_active_account().get("login")
+    allowed = get_account_symbols(login)
+    if allowed and symbol not in allowed:
+        return {"success": False, "error": f"Symbol '{symbol}' tidak tersedia untuk akun ini"}
+
+    set_active_symbol(symbol)
+
+    _engine_restart_symbol()
+
+    return {"success": True, "symbol": symbol, "symbols": allowed}
 
 # =====================================
 # Position Management API
@@ -1349,7 +1419,7 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 <h2>Manual Order - SL, TP1, TP2</h2>
 <div style="background:#1e293b;border-radius:6px;padding:16px">
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-    <div><label style="font-size:11px;color:#94a3b8">Symbol</label><br><input id="mo_symbol" value="XAUUSDc" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">Symbol</label><br><select id="mo_symbol" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"><option value="XAUUSDc">XAUUSDc</option></select></div>
     <div><label style="font-size:11px;color:#94a3b8">Signal</label><br>
       <select id="mo_signal" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px">
         <option value="BUY">BUY</option>
@@ -1416,7 +1486,7 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 <h2>Grid Order (Buy Stop / Sell Stop)</h2>
 <div style="background:#1e293b;border-radius:6px;padding:16px;max-width:500px">
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-    <div><label style="font-size:11px;color:#94a3b8">Symbol</label><br><input id="gr_symbol" value="XAUUSDc" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
+    <div><label style="font-size:11px;color:#94a3b8">Symbol</label><br><select id="gr_symbol" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"><option value="XAUUSDc">XAUUSDc</option></select></div>
     <div><label style="font-size:11px;color:#94a3b8">Layers</label><br><input id="gr_layers" value="3" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
     <div><label style="font-size:11px;color:#94a3b8">Spacing (pt)</label><br><input id="gr_spacing" value="3.0" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
     <div><label style="font-size:11px;color:#94a3b8">Lot per level</label><br><input id="gr_lot" value="0.01" style="width:100%;padding:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px"></div>
@@ -1430,7 +1500,7 @@ tr:hover td { background:rgba(59,130,246,0.05); }
   </div>
   <div id="gr_result" style="margin-top:12px;font-size:12px;color:#6ee7b7"></div>
 </div>
-<h2>Live XAUUSDc</h2>
+<h2>Live <span id="gridSymbolTitle">XAUUSDc</span></h2>
 <div class="chart-container" style="height:140px;max-width:500px">
   <canvas id="priceChartGrid"></canvas>
 </div>
@@ -1447,6 +1517,9 @@ tr:hover td { background:rgba(59,130,246,0.05); }
     <div><span style="color:#94a3b8">Direction</span><br><span id="atm_dir" style="font-size:16px;font-weight:600">-</span></div>
     <div><span style="color:#94a3b8">Action</span><br><span id="atm_action" style="font-size:16px;font-weight:600">-</span></div>
   </div>
+  <hr style="border-color:#334155;margin:12px 0">
+  <div style="color:#94a3b8;margin-bottom:4px;font-size:11px">AutoTrade Status</div>
+  <div id="autoTraderInfo" style="font-size:12px;color:#e2e8f0;margin-bottom:8px">-</div>
   <hr style="border-color:#334155;margin:12px 0">
   <div style="color:#94a3b8;margin-bottom:6px">Positions <span id="atm_pos_count" style="color:#e2e8f0">0</span></div>
   <div id="atm_positions" style="max-height:200px;overflow-y:auto"></div>
@@ -1554,6 +1627,14 @@ tr:hover td { background:rgba(59,130,246,0.05); }
   <button onclick="setAutoTradeAfterSwitch(false)" style="padding:8px 14px;background:#ef4444;color:#fff;border:none;border-radius:4px;cursor:pointer">Matikan Auto-Trade</button>
 </div>
 
+<h2 style="margin-top:18px">Symbol Trading</h2>
+<div style="background:#1e293b;border-radius:6px;padding:16px;max-width:520px">
+  <div><label style="font-size:11px;color:#94a3b8">Pilih simbol untuk akun ini</label><br>
+    <select id="acc_symbol_sel" onchange="changeActiveSymbol()" style="width:100%;padding:8px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:4px;margin-top:4px"></select>
+  </div>
+  <div id="acc_symbol_result" style="margin-top:10px;font-size:12px;color:#94a3b8"></div>
+</div>
+
 <h2 style="margin-top:18px">Login ke Akun Lain</h2>
 <div style="background:#1e293b;border-radius:6px;padding:16px;max-width:520px">
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -1647,8 +1728,9 @@ let priceChartInst = null;
 
 async function fetchPriceChart(canvasId) {
   try {
-    const pc = await fetchJson('/api/chart/candles', {candles:[]});
+    const pc = await fetchJson('/api/chart/candles', {candles:[], symbol:'XAUUSDc'});
     if (!pc.candles || !pc.candles.length) return;
+    const chartSymbol = pc.symbol || 'XAUUSDc';
     const labels = pc.candles.map(c => c.time);
     const prices = pc.candles.map(c => c.close);
     if (priceChartInst) priceChartInst.destroy();
@@ -1659,7 +1741,7 @@ async function fetchPriceChart(canvasId) {
       data: {
         labels,
         datasets: [{
-          label: 'XAUUSDc',
+          label: chartSymbol,
           data: prices,
           borderColor: prices[0] <= prices[prices.length-1] ? '#6ee7b7' : '#fca5a5',
           borderWidth: 2,
@@ -1686,8 +1768,9 @@ async function fetchManualChart(entryLine, slLine, tp1Line, tp2Line) {
     if (typeof ChartAnnotation !== 'undefined') {
       Chart.register(ChartAnnotation);
     }
-    const pc = await fetchJson('/api/chart/candles', {candles:[]});
+    const pc = await fetchJson('/api/chart/candles', {candles:[], symbol:'XAUUSDc'});
     if (!pc.candles || !pc.candles.length) return;
+    const chartSymbol = pc.symbol || 'XAUUSDc';
     const labels = pc.candles.map(c => c.time);
     const prices = pc.candles.map(c => c.close);
     if (manualChartInst) manualChartInst.destroy();
@@ -1729,7 +1812,7 @@ async function fetchManualChart(entryLine, slLine, tp1Line, tp2Line) {
       data: {
         labels,
         datasets: [{
-          label: 'XAUUSDc',
+          label: chartSymbol,
           data: prices,
           borderColor: prices[0] <= prices[prices.length-1] ? '#6ee7b7' : '#fca5a5',
           borderWidth: 2,
@@ -1820,6 +1903,13 @@ async function fetchData() {
     document.getElementById('positionInfo').innerHTML = (overview.open_count||0) > 0
       ? '<span class="status-dot status-running"></span> ' + overview.open_count + ' posisi aktif'
       : '<span class="status-dot" style="background:#64748b"></span> Tidak ada posisi';
+
+    const atStatus = overview.auto_trader || 'READY';
+    const atReason = overview.auto_trader_reason || '';
+    document.getElementById('autoTraderInfo').innerHTML =
+      '<span class="status-dot ' + (atStatus === 'BLOCKED' ? 'status-stopped' : 'status-running') + '"></span> ' +
+      atStatus +
+      (atStatus === 'BLOCKED' && atReason ? ' — ' + atReason : '');
 
     document.getElementById('positions').innerHTML = (overview.open_positions||[]).map(p => '<tr><td>'+p.ticket+'</td><td><span class="badge '+(p.type||'').toLowerCase()+'">'+(p.type||'')+'</span></td><td>'+p.volume+'</td><td>'+p.price_open+'</td><td>'+p.price_current+'</td><td class="'+(p.profit>=0?'green':'red')+'">'+(p.profit>=0?'+':'')+'$'+p.profit.toFixed(2)+'</td><td>'+(p.sl||'-')+'</td><td>'+(p.tp||'-')+'</td></tr>').join('') || '<tr><td colspan="8" style="text-align:center;color:#64748b">Tidak ada posisi</td></tr>';
 
@@ -2471,6 +2561,54 @@ async function loadAccountStatus() {
   el('acc_balance').textContent = a.balance != null ? a.balance.toLocaleString(undefined,{maximumFractionDigits:2}) + ' ' + (a.currency||'') : '-';
   el('acc_equity').textContent = a.equity != null ? a.equity.toLocaleString(undefined,{maximumFractionDigits:2}) + ' ' + (a.currency||'') : '-';
   el('acc_lev').textContent = a.leverage ? '1:' + a.leverage : '-';
+
+  const symSel = el('acc_symbol_sel');
+  if (symSel) {
+    const symbols = d.symbols || ['XAUUSDc'];
+    const active = d.symbol || 'XAUUSDc';
+    symSel.innerHTML = symbols.map(s => '<option value="' + escapeHtml(s) + '"' + (s === active ? ' selected' : '') + '>' + escapeHtml(s) + '</option>').join('');
+    const res = el('acc_symbol_result');
+    if (res) res.textContent = 'Simbol aktif: ' + active + (symbols.length > 1 ? ' (dapat diganti)' : '');
+  }
+  const fillSel = (id, active) => {
+    const sel = el(id);
+    if (!sel) return;
+    const symbols = d.symbols || ['XAUUSDc'];
+    sel.innerHTML = symbols.map(s => '<option value="' + escapeHtml(s) + '"' + (s === active ? ' selected' : '') + '>' + escapeHtml(s) + '</option>').join('');
+  };
+  fillSel('mo_symbol', d.symbol || 'XAUUSDc');
+  fillSel('gr_symbol', d.symbol || 'XAUUSDc');
+  const gridTitle = el('gridSymbolTitle');
+  if (gridTitle) gridTitle.textContent = d.symbol || 'XAUUSDc';
+}
+async function changeActiveSymbol() {
+  const symSel = document.getElementById('acc_symbol_sel');
+  const res = document.getElementById('acc_symbol_result');
+  if (!symSel || !res) return;
+  const symbol = symSel.value;
+  res.style.color = '#fbbf24';
+  res.textContent = 'Mengganti simbol ke ' + symbol + '...';
+  try {
+    const d = await fetch('/api/account/symbol', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({symbol})
+    }).then(r => r.json());
+    if (d.success) {
+      res.style.color = '#6ee7b7';
+      res.textContent = 'Simbol aktif: ' + d.symbol;
+      showNotif('Engine restart ke simbol ' + d.symbol, '#22c55e');
+      if (typeof refreshOverview === 'function') refreshOverview();
+      if (typeof fetchPriceChart === 'function') fetchPriceChart('priceChartGrid');
+      if (typeof fetchManualChart === 'function') fetchManualChart();
+    } else {
+      res.style.color = '#ef4444';
+      res.textContent = 'Gagal: ' + (d.error || 'unknown');
+    }
+  } catch(e) {
+    res.style.color = '#ef4444';
+    res.textContent = 'Error: ' + e.message;
+  }
 }
 async function reloadAccountStatus() {
   const btn = document.getElementById('accLoginResult') || document.getElementById('acc_login_result');

@@ -79,18 +79,24 @@ class PartedOrder:
                 print("  Market order akan pakai harga market (ask/bid saat ini)")
                 print()
 
+        from app.config.settings import get_symbol_params
+        _sp = get_symbol_params(symbol)
+        _sl_pts = _sp.get("sl_points", 500)
+        _tp1_pts = _sp.get("tp1_points", 500)
+        _tp2_pts = _sp.get("tp2_points", 1000)
+
         if stop_loss is None:
-            sl_distance = 500 * point
+            sl_distance = _sl_pts * point
             stop_loss = entry_price - sl_distance if signal == "BUY" else entry_price + sl_distance
             stop_loss = round(stop_loss / point) * point
 
         if take_profit1 is None:
-            tp1_distance = 500 * point
+            tp1_distance = _tp1_pts * point
             take_profit1 = entry_price + tp1_distance if signal == "BUY" else entry_price - tp1_distance
             take_profit1 = round(take_profit1 / point) * point
 
         if take_profit2 is None:
-            tp2_distance = 1000 * point
+            tp2_distance = _tp2_pts * point
             take_profit2 = entry_price + tp2_distance if signal == "BUY" else entry_price - tp2_distance
             take_profit2 = round(take_profit2 / point) * point
 

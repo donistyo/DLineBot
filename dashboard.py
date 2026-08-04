@@ -29,7 +29,13 @@ def start_engine():
     if _runner and _runner.running:
         return
     from app.live.live_runner import LiveRunner
-    _runner = LiveRunner(interval=10, symbol="XAUUSDc", timeframe="M1", bars=2000, dry_run=False, mode="scalp")
+    try:
+        from app.mt5.account_store import get_active_symbol
+        symbol = get_active_symbol()
+    except Exception:
+        symbol = "XAUUSDc"
+    print(f"Engine symbol: {symbol}")
+    _runner = LiveRunner(interval=10, symbol=symbol, timeframe="M1", bars=2000, dry_run=False, mode="scalp")
     _runner_thread = threading.Thread(target=_runner.start, daemon=True)
     _runner_thread.start()
     print("Live engine started.")

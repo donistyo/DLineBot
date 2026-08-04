@@ -14,9 +14,9 @@ class DailyRiskManager:
         self.max_daily_loss = max_daily_loss
         self.max_daily_profit = max_daily_profit
 
-    def allow(self):
+    def allow(self, symbol=None):
 
-        summary = self.history.summary()
+        summary = self.history.summary(symbol=symbol)
 
         trade_today = summary["trade"]
 

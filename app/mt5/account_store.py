@@ -24,17 +24,48 @@ def _save_json(path, data):
 
 
 def get_active_account():
-    return _load_json(ACTIVE_FILE, {})
+    data = _load_json(ACTIVE_FILE, {})
+    if data and "symbol" not in data:
+        data["symbol"] = first_symbol_for_login(data.get("login"))
+    return data
 
 
-def set_active_account(login, password, server):
+def set_active_account(login, password, server, symbol=None):
     data = {
         "login": str(login),
         "password": str(password),
         "server": str(server),
+        "symbol": symbol or first_symbol_for_login(login),
     }
     _save_json(ACTIVE_FILE, data)
     return data
+
+
+def get_active_symbol():
+    return get_active_account().get("symbol") or "XAUUSDc"
+
+
+def set_active_symbol(symbol):
+    data = get_active_account()
+    data["symbol"] = symbol
+    _save_json(ACTIVE_FILE, data)
+    return data
+
+
+def first_symbol_for_login(login):
+    symbols = get_account_symbols(login)
+    return symbols[0] if symbols else "XAUUSDc"
+
+
+def get_account_symbols(login):
+    login = str(login)
+    for a in get_saved_accounts():
+        if str(a.get("login")) == login:
+            symbols = a.get("symbols") or []
+            if symbols:
+                return symbols
+            return ["XAUUSDc"]
+    return ["XAUUSDc"]
 
 
 def clear_active_account():
@@ -46,7 +77,7 @@ def get_saved_accounts():
     return _load_json(SAVED_FILE, [])
 
 
-def add_saved_account(name, login, password, server):
+def add_saved_account(name, login, password, server, symbols=None):
     accounts = get_saved_accounts()
     accounts = [a for a in accounts if a.get("name", "").lower() != name.lower()]
     accounts.append({
@@ -54,6 +85,7 @@ def add_saved_account(name, login, password, server):
         "login": str(login),
         "password": str(password),
         "server": str(server),
+        "symbols": symbols or ["XAUUSDc"],
     })
     _save_json(SAVED_FILE, accounts)
     return accounts

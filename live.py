@@ -47,9 +47,16 @@ def main():
 
     start_dashboard()
 
+    try:
+        from app.mt5.account_store import get_active_symbol
+        symbol = get_active_symbol()
+    except Exception:
+        symbol = "XAUUSDc"
+    print(f"Engine symbol: {symbol}")
+
     runner = LiveRunner(
         interval=10,
-        symbol="XAUUSDc",
+        symbol=symbol,
         timeframe="M1",
         bars=2000,
         dry_run=False,

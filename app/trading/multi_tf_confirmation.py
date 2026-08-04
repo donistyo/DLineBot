@@ -10,12 +10,14 @@ class MultiTimeframeConfirmation:
         symbol="XAUUSD",
         primary_tf="M1",
         higher_tfs=None,
-        bars=500
+        bars=500,
+        min_adx=30,
     ):
         self.symbol = symbol
         self.primary_tf = primary_tf
         self.higher_tfs = higher_tfs or ["M5", "M15"]
         self.bars = bars
+        self.min_adx = min_adx
         self.collector = Collector()
         self.indicator = IndicatorEngine()
         self.cleaner = DataCleaner()
@@ -37,6 +39,11 @@ class MultiTimeframeConfirmation:
         ema200 = row["EMA200"]
         adx = row["ADX"]
 
+        # Strategi: hanya anggap trending jika ADX cukup kuat (>= min_adx)
+        # supaya pasar sideways (ADX rendah) tidak dianggap "searah" palsu.
+        if adx < self.min_adx:
+            return "SIDEWAYS"
+
         if close > ema20 > ema50:
             trend = "UP"
         elif close < ema20 < ema50:
@@ -46,9 +53,10 @@ class MultiTimeframeConfirmation:
 
         return trend
 
-    def confirm(self, prediction, last_primary=None):
+    def confirm(self, prediction, last_primary=None, signal=None):
 
-        signal = prediction.get("signal", "HOLD")
+        if signal is None:
+            signal = prediction.get("signal", "HOLD")
         confidence = prediction.get("confidence", 0)
 
         tf_results = {}
@@ -94,7 +102,7 @@ class MultiTimeframeConfirmation:
 
         alignment_pct = aligned / total if total > 0 else 0
 
-        tf_confirmed = alignment_pct >= 0.5
+        tf_confirmed = alignment_pct >= 1.0
 
         if not tf_confirmed:
             reason = (

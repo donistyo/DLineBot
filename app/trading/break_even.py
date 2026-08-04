@@ -60,10 +60,16 @@ class BreakEvenManager:
             }
 
         # ======================================
-        # Sudah Break Even
+        # Sudah Break Even / SL sudah di sisi profit
+        # (SL tidak boleh diturunkan: trailing mungkin sudah menaikkannya)
         # ======================================
 
-        if abs(position.sl - position.price_open) < 0.01:
+        if position.type == 0:  # BUY: SL harus >= entry agar aman
+            already_locked = position.sl >= position.price_open - 0.01
+        else:                   # SELL: SL harus <= entry agar aman
+            already_locked = position.sl <= position.price_open + 0.01
+
+        if already_locked:
 
             return {
 
@@ -71,7 +77,7 @@ class BreakEvenManager:
 
                 "action": "NONE",
 
-                "reason": "Break Even sudah aktif."
+                "reason": "Break Even sudah aktif / SL sudah aman."
 
             }
 
