@@ -3,7 +3,7 @@ class PositionSizingAI:
     def __init__(
         self,
         risk_percent=2.0,
-        atr_sl_multiplier=1.5,
+        atr_sl_multiplier=2.5,
         min_confidence=0.50,
         max_spread_ratio=0.5,
         rr_ratio=2.0,

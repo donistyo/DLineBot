@@ -16,7 +16,7 @@ class DailyRiskManager:
 
     def allow(self, symbol=None):
 
-        summary = self.history.summary(symbol=symbol)
+        summary = self.history.summary(symbol=symbol, bot_only=True)
 
         trade_today = summary["trade"]
 

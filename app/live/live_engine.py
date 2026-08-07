@@ -202,7 +202,7 @@ class LiveEngine:
         risk_percent = 1.5 if BROKER == "exness" else 2.0
         self.position_sizing = PositionSizingAI(
             risk_percent=risk_percent,
-            atr_sl_multiplier=1.5 if mode == "scalp" else 2.0,
+            atr_sl_multiplier=2.5,
             rr_ratio=rr_ratio,
             max_spread_ratio=100,
             min_confidence=0.10,
@@ -293,6 +293,14 @@ class LiveEngine:
         _cfg_max_trade = get_trade_config("max_trade")
         if _cfg_max_trade:
             daily_max_trade = int(_cfg_max_trade)
+
+        _cfg_max_loss = get_trade_config("daily_max_loss")
+        if _cfg_max_loss is not None:
+            daily_max_loss = float(_cfg_max_loss)
+
+        _cfg_max_profit = get_trade_config("daily_max_profit")
+        if _cfg_max_profit is not None:
+            daily_max_profit = float(_cfg_max_profit)
 
         self.atr_protection = ATRProtectionManager(
             sl_atr_mult=float(get_trade_config("sl_atr_mult", 1.5)),
@@ -736,6 +744,17 @@ class LiveEngine:
             DailyTrendView.show(fundamental)
 
             # ===============================
+            # Prediction
+            # ===============================
+
+            prediction = self.predict(df)
+
+            PredictionView.show(
+                prediction,
+                last
+            )
+
+            # ===============================
             # 15-Minute Signal
             # ===============================
 
@@ -759,7 +778,7 @@ class LiveEngine:
                 # -------------------------------------------------
                 # 15-Minute Fundamental Trade Execution
                 # -------------------------------------------------
-                ft_result = self.fundamental_trader.execute(regime=regime)
+                ft_result = self.fundamental_trader.execute(regime=regime, prediction=prediction)
                 if ft_result and ft_result["status"] not in ("SKIPPED", "ERROR"):
                     print()
                     print("=" * 60)
@@ -771,17 +790,6 @@ class LiveEngine:
                     print(f"SL     : {ft_result['stop_loss']}")
                     print(f"TP1    : {ft_result['take_profit1']}")
                     print(f"TP2    : {ft_result['take_profit2']}")
-
-            # ===============================
-            # Prediction
-            # ===============================
-
-            prediction = self.predict(df)
-
-            PredictionView.show(
-                prediction,
-                last
-            )
 
             # ===============================
             # AI Confidence
@@ -1103,6 +1111,19 @@ class LiveEngine:
 
             )
 
+            if can_trade and decision["action"] in ("BUY", "SELL"):
+                same_dir_exists = any(
+                    ((decision["action"] == "BUY" and p.type == 0) or
+                     (decision["action"] == "SELL" and p.type == 1))
+                    for p in (positions or [])
+                )
+                if same_dir_exists:
+                    can_trade = False
+                    result = {
+                        "status": "BLOCKED",
+                        "reason": f"Sudah ada posisi {decision['action']}, tidak buka lagi (anti doubling down)."
+                    }
+
             session_result = None
             if can_trade:
                 open_tickets = {p.ticket for p in positions} if positions else set()
@@ -1127,11 +1148,11 @@ class LiveEngine:
                         _cfg = json.load(_f)
                         risk["lot_size"] = _cfg.get("lot_size", TRADE_LOT_SIZE)
                         _use_atr = bool(_cfg.get("use_atr_protection", True))
-                        _sl_atr_mult = float(_cfg.get("sl_atr_mult", 1.5))
+                        _sl_atr_mult = float(_cfg.get("sl_atr_mult", 2.5))
                 except:
                     risk["lot_size"] = TRADE_LOT_SIZE
                     _use_atr = True
-                    _sl_atr_mult = 1.5
+                    _sl_atr_mult = 2.5
                 _sp = get_symbol_params(self.symbol)
                 _sl_pts = float(_sp.get("sl_points", 6.0))
                 _tp1_pts = float(_sp.get("tp1_points", _sl_pts * 1.5))
@@ -1146,6 +1167,23 @@ class LiveEngine:
                     _tp_dist = 0.0
                     risk["atr"] = _atr_now
                     risk["sl_atr"] = _sl_atr_mult
+
+                from app.trading.lot_risk_guard import get_safe_lot, get_max_positions_for_lot
+                _account = self.account_manager.get_info()
+                _balance = _account.get("balance", 0) if isinstance(_account, dict) else 1000
+                _lot_check = get_safe_lot(_balance, _atr_now, _sl_atr_mult, risk["lot_size"])
+                if _lot_check["reduced"]:
+                    print()
+                    print("=" * 60)
+                    print("LOT RISK GUARD")
+                    print("=" * 60)
+                    print(f"  {_lot_check['reason']}")
+                risk["lot_size"] = _lot_check["lot_size"]
+
+                _safe_max_pos = get_max_positions_for_lot(risk["lot_size"])
+                if _safe_max_pos < self.position_filter.max_positions:
+                    self.position_filter.max_positions = _safe_max_pos
+                    print(f"  Max positions disesuaikan ke {_safe_max_pos} (lot {risk['lot_size']})")
                 if decision["action"] == "BUY":
                     risk["stop_loss"] = round(risk["entry_price"] - _sl_dist, 5)
                     risk["take_profit"] = round(risk["entry_price"] + _tp_dist, 5) if _tp_dist > 0 else 0.0

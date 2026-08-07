@@ -80,7 +80,7 @@ class TelegramNotifier:
 
     def _cmd_help(self, chat_id):
         help_text = (
-            "\U0001f916 DLineBot Commands\n\n"
+            "\U0001f916 DLine Commands\n\n"
             "/dashboard - Tampilkan dashboard\n"
             "/start atau /on - Hidupkan auto-trade\n"
             "/off - Matikan auto-trade\n"
@@ -144,7 +144,7 @@ class TelegramNotifier:
             spread = d.get("spread", 0)
 
             text = (
-                "\U0001f4ca DLineBot Dashboard\n"
+                "\U0001f4ca DLine Dashboard\n"
                 "\n"
                 f"\U0001f3e6 Balance   ${balance:.2f}\n"
                 f"\U0001f4b0 Equity    ${equity:.2f}\n"
@@ -154,7 +154,7 @@ class TelegramNotifier:
                 f"{'+' if profit_today >= 0 else ''}${profit_today:.2f}\n"
                 f"\U0001f4cf Spread    {spread}\n"
                 "\n"
-                "\U0001f916 DLineBot"
+                "\U0001f916 DLine"
             )
             self.send(text, chat_id)
 
@@ -206,7 +206,7 @@ class TelegramNotifier:
         if reason_lines:
             text += "\nReason\n" + "\n".join(reason_lines)
 
-        text += "\n\n\U0001f916 DLineBot"
+        text += "\n\n\U0001f916 DLine"
         return self.send(text)
 
     # =====================================
@@ -233,7 +233,7 @@ class TelegramNotifier:
         if signal:
             text += f"Signal   {signal}\n"
 
-        text += "\n\U0001f916 DLineBot"
+        text += "\n\U0001f916 DLine"
         return self.send(text)
 
     # =====================================
@@ -248,7 +248,7 @@ class TelegramNotifier:
         equity = account.get("equity", 0) if account else 0
 
         text = (
-            f"\U0001f4ca DLineBot Dashboard\n"
+            f"\U0001f4ca DLine Dashboard\n"
             f"\n"
             f"\U0001f3e6 Balance   ${balance:.2f}\n"
             f"\U0001f4b0 Equity    ${equity:.2f}\n"
@@ -274,6 +274,6 @@ class TelegramNotifier:
         if dashboard_url:
             text += f"\U0001f310 Dashboard : {dashboard_url}\n"
 
-        text += f"\n\U0001f916 DLineBot"
+        text += f"\n\U0001f916 DLine"
 
         return self.send(text)

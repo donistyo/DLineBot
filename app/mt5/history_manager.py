@@ -16,7 +16,7 @@ class HistoryManager:
     # Get Today Closed Trades
     # =====================================
 
-    def _today_exits(self, symbol=None):
+    def _today_exits(self, symbol=None, bot_only=False):
 
         MT5Session.ensure_connection()
 
@@ -41,11 +41,12 @@ class HistoryManager:
             if d.type in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL)
             and d.entry == mt5.DEAL_ENTRY_OUT
             and (symbol is None or d.symbol == symbol)
+            and (not bot_only or (d.comment and d.comment.startswith("DLineBot")))
         ]
 
         return list(exits)
 
-    def today(self, symbol=None):
+    def today(self, symbol=None, bot_only=False):
 
         MT5Session.ensure_connection()
 
@@ -70,18 +71,22 @@ class HistoryManager:
             if d.type in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL)
             and d.entry == DEAL_ENTRY_IN
             and (symbol is None or d.symbol == symbol)
+            and (not bot_only or (d.comment and d.comment.startswith("DLineBot")))
         ]
 
         return list(trades)
 
-    def today_exits(self, symbol=None):
+    def today_exits(self, symbol=None, bot_only=False):
 
-        return self._today_exits(symbol)
+        return self._today_exits(symbol, bot_only)
 
-    def summary(self, symbol=None):
+    def summary(self, symbol=None, bot_only=False):
 
-        entries = self.today(symbol)
-        exits = self._today_exits(symbol)
+        entries = self.today(symbol, bot_only)
+        exits = self._today_exits(symbol, bot_only=False)
+
+        entry_pos_ids = {d.position_id for d in entries}
+        matched_exits = [e for e in exits if e.position_id in entry_pos_ids]
 
         trade = len(entries)
 
@@ -95,7 +100,7 @@ class HistoryManager:
         largest_win = 0
         largest_loss = 0
 
-        for deal in exits:
+        for deal in matched_exits:
 
             p = deal.profit
 

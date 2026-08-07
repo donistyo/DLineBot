@@ -169,15 +169,20 @@ class ATRProtectionManager:
             return {"status": "OK", "action": "TRAILING", "reason": "SL trailing sudah optimal."}
 
         # ======================================
-        # Break even at 0.5x ATR
+        # Break even at 0.5x ATR + spread buffer
         # ======================================
         be_trigger = self.be_trigger_atr * atr
         if position.profit >= be_trigger:
             if position.sl == 0 or (is_buy and position.sl < position.price_open) or (not is_buy and position.sl > position.price_open):
-                result = self.controller.modify_sl(position, round(position.price_open, 5))
+                spread_buffer = atr * 0.05
+                if is_buy:
+                    be_sl = round(position.price_open - spread_buffer, 5)
+                else:
+                    be_sl = round(position.price_open + spread_buffer, 5)
+                result = self.controller.modify_sl(position, be_sl)
                 return {"status": "UPDATED", "action": "BREAK_EVEN",
-                        "reason": f"Break even di {self.be_trigger_atr:.1f}xATR ({be_trigger:.2f}).",
-                        "new_stop_loss": position.price_open, "result": result}
+                        "reason": f"Break even di {self.be_trigger_atr:.1f}xATR ({be_trigger:.2f}) + spread buffer.",
+                        "new_stop_loss": be_sl, "result": result}
             return {"status": "OK", "action": "BREAK_EVEN", "reason": "Break even sudah aktif."}
 
         return {"status": "WAITING", "action": "NONE",

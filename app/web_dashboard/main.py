@@ -426,16 +426,22 @@ def api_live_market():
     for sym in symbols:
         try:
             import MetaTrader5 as mt5
-            MT5Session.ensure_connection()
-            tick = mt5.symbol_info_tick(sym)
-            if tick:
-                spread = round((tick.ask - tick.bid) / mt5.symbol_info(sym).point, 0)
+            connected = MT5Session.ensure_connection()
+            info = mt5.symbol_info(sym)
+            tick = mt5.symbol_info_tick(sym) if info else None
+            if tick and info:
+                spread = round((tick.ask - tick.bid) / info.point, 0)
                 out.append({
                     "symbol": sym, "bid": tick.bid, "ask": tick.ask,
                     "spread": int(spread)
                 })
-        except:
-            pass
+            else:
+                with open("runtime/live_market_error.log", "a") as fe:
+                    fe.write(f"{datetime.now()} {sym} info={info is not None} tick={tick is not None}\n")
+        except Exception as e:
+            import traceback
+            with open("runtime/live_market_error.log", "a") as fe:
+                fe.write(f"{datetime.now()} {sym} {e}\n{traceback.format_exc()}\n")
     return {"symbols": out}
 
 # =====================================

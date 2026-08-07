@@ -88,7 +88,7 @@ class LiveRunner:
         print("Run: python dashboard.py")
         print("=" * 60)
 
-        self.telegram.send(f"DLineBot STARTED\nDashboard : {DASHBOARD_URL}")
+        self.telegram.send(f"DLine STARTED\nDashboard : {DASHBOARD_URL}")
 
         try:
 

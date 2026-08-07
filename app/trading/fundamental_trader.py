@@ -88,7 +88,7 @@ class FundamentalTrader:
             return True
         return datetime.now() - self.last_trade_time >= self.cooldown
 
-    def should_trade(self, regime=None):
+    def should_trade(self, regime=None, prediction=None):
         import json, os
         try:
             with open("runtime/auto_trade_enabled.json") as f:
@@ -117,6 +117,12 @@ class FundamentalTrader:
             if expected and direction != expected:
                 return False, f"Fundamental {direction} vs trend {trend} (lawan arah)"
 
+        if prediction:
+            ai_signal = prediction.get("signal", "WAIT")
+            ai_conf = prediction.get("confidence", 0)
+            if ai_signal in ("BUY", "SELL") and ai_conf >= 60 and direction != ai_signal:
+                return False, f"Fundamental {direction} vs AI {ai_signal} ({ai_conf:.0f}%) (lawan arah)"
+
         tf_ok, tf_reason = self._higher_tf_aligned(direction)
         if not tf_ok:
             return False, tf_reason
@@ -131,10 +137,10 @@ class FundamentalTrader:
 
         return True, f"Fundamental {bias} -> {direction}"
 
-    def execute(self, regime=None):
+    def execute(self, regime=None, prediction=None):
         MT5Session.ensure_connection()
 
-        ok, reason = self.should_trade(regime)
+        ok, reason = self.should_trade(regime, prediction)
         if not ok:
             print()
             print("=" * 60)
@@ -195,6 +201,19 @@ class FundamentalTrader:
         load_trade_config()
         _lot = get_trade_config("lot_size")
         volume = float(_lot) if _lot else info.volume_min
+
+        from app.trading.lot_risk_guard import get_safe_lot
+        try:
+            from app.mt5.account_manager import AccountManager
+            _acc = AccountManager().get_info()
+            _bal = _acc.get("balance", 1000) if isinstance(_acc, dict) else 1000
+        except Exception:
+            _bal = 1000
+        _atr_now = self._estimate_atr()
+        _lot_check = get_safe_lot(_bal, _atr_now, None, volume)
+        volume = _lot_check["lot_size"]
+        if _lot_check["reduced"]:
+            print(f"  LOT RISK GUARD: {_lot_check['reason']}")
 
         try:
             result = self.order.execute(

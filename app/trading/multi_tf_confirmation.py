@@ -84,8 +84,8 @@ class MultiTimeframeConfirmation:
                     aligned += 1
                 elif signal == "HOLD":
                     aligned += 1
-                else:
-                    pass
+                elif trend == "SIDEWAYS":
+                    aligned += 1
 
                 total += 1
 
@@ -102,7 +102,7 @@ class MultiTimeframeConfirmation:
 
         alignment_pct = aligned / total if total > 0 else 0
 
-        tf_confirmed = alignment_pct >= 1.0
+        tf_confirmed = alignment_pct >= 0.5
 
         if not tf_confirmed:
             reason = (
