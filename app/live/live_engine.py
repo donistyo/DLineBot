@@ -238,7 +238,9 @@ class LiveEngine:
         _cfg_positions = get_trade_config("max_positions")
         if _cfg_positions:
             max_pos = int(_cfg_positions)
-        self.position_filter = PositionFilter(max_positions=max_pos)
+        _cfg_same_dir = get_trade_config("max_same_direction")
+        _same_dir = int(_cfg_same_dir) if _cfg_same_dir else 3
+        self.position_filter = PositionFilter(max_positions=max_pos, max_same_direction=_same_dir)
 
         self.session_manager = SessionManager(max_sessions=10, max_per_session=10)
 
@@ -261,10 +263,19 @@ class LiveEngine:
         # Pre-populate recovery tracker for existing deep loss positions
         existing = self.position_manager.get_positions(self.symbol)
         self._recovery_seen = {}
+        self._last_same_dir_entry = {}
         if existing:
             for p in existing:
                 if p.profit < -15.0:
                     self._recovery_seen[p.ticket] = True
+                try:
+                    direction = "BUY" if p.type == 0 else "SELL"
+                    entry_time = datetime.fromtimestamp(p.time)
+                    prev = self._last_same_dir_entry.get(direction)
+                    if prev is None or entry_time > prev:
+                        self._last_same_dir_entry[direction] = entry_time
+                except Exception:
+                    pass
 
         if mode == "scalp":
             be_trigger = 2.0
@@ -316,6 +327,12 @@ class LiveEngine:
             partial_close=bool(get_trade_config("partial_close", False)),
             early_tp_atr=float(get_trade_config("early_tp_atr", 0.65)),
             early_pullback_atr=float(get_trade_config("early_pullback_atr", 0.25)),
+            be_buffer_atr=float(get_trade_config("be_buffer_atr", 0.0)),
+            fast_tp_usd=float(get_trade_config("fast_tp_usd", 2.5)),
+            stall_start_usd=float(get_trade_config("stall_start_usd", 1.0)),
+            stall_seconds=float(get_trade_config("stall_seconds", 60.0)),
+            loser_seconds=float(get_trade_config("loser_seconds", 600.0)),
+            loser_min_profit=float(get_trade_config("loser_min_profit", 0.0)),
         )
 
         self.break_even = BreakEvenManager(
@@ -458,6 +475,14 @@ class LiveEngine:
 
         self._last_closed_direction = None
         self._last_closed_time = None
+        self._last_same_dir_entry = {}
+        self._same_dir_spacing = 60.0
+        try:
+            _spacing_cfg = float(get_trade_config("same_dir_spacing", 60.0))
+            if _spacing_cfg > 0:
+                self._same_dir_spacing = _spacing_cfg
+        except Exception:
+            pass
         self._seen_tickets = set()
         self._consecutive_losses = 0
         self._score_penalty = 0
@@ -1078,6 +1103,10 @@ class LiveEngine:
                 pass
 
             reentry_reason = self._reentry_blocked(decision["action"], cooldown_minutes=15)
+            same_dir_reason = self._same_dir_spacing_blocked(decision["action"])
+
+            if not reentry_reason and same_dir_reason:
+                reentry_reason = same_dir_reason
 
             _atr_filter_ok = True
             _atr_filter_reason = None
@@ -1111,21 +1140,8 @@ class LiveEngine:
 
             )
 
-            if can_trade and decision["action"] in ("BUY", "SELL"):
-                same_dir_exists = any(
-                    ((decision["action"] == "BUY" and p.type == 0) or
-                     (decision["action"] == "SELL" and p.type == 1))
-                    for p in (positions or [])
-                )
-                if same_dir_exists:
-                    can_trade = False
-                    result = {
-                        "status": "BLOCKED",
-                        "reason": f"Sudah ada posisi {decision['action']}, tidak buka lagi (anti doubling down)."
-                    }
-
-            session_result = None
             if can_trade:
+                session_result = None
                 open_tickets = {p.ticket for p in positions} if positions else set()
                 session_result = self.session_manager.allow(open_tickets)
                 if not session_result["allowed"]:
@@ -1334,6 +1350,7 @@ class LiveEngine:
             AutoTraderView.show(result)
 
             if result["status"] in ("DRY_RUN", "SUCCESS"):
+                self._update_same_dir_entry(decision["action"])
                 self.telegram.notify_open(
                     prediction=prediction,
                     risk=risk,
@@ -1701,6 +1718,22 @@ class LiveEngine:
             return None
         return f"Hindari re-entry arah sama: posisi {self._last_closed_direction} baru saja ditutup."
 
+    def _same_dir_spacing_blocked(self, decision_action):
+        if decision_action not in ("BUY", "SELL"):
+            return None
+        last_time = self._last_same_dir_entry.get(decision_action)
+        if last_time is None:
+            return None
+        elapsed = (datetime.now() - last_time).total_seconds()
+        if elapsed >= self._same_dir_spacing:
+            return None
+        return (f"Jarak antar entry {decision_action} {elapsed:.0f}s < "
+                f"{self._same_dir_spacing:.0f}s - tunggu spacing searah.")
+
+    def _update_same_dir_entry(self, decision_action):
+        if decision_action in ("BUY", "SELL"):
+            self._last_same_dir_entry[decision_action] = datetime.now()
+
     # =====================================
     # Circuit Breaker Skor
     # =====================================
@@ -1728,7 +1761,7 @@ class LiveEngine:
             self._score_penalty = 0
 
     def _current_min_score(self):
-        return 55 + self._score_penalty
+        return 67 + self._score_penalty
 
     # =====================================
     # Stop Engine

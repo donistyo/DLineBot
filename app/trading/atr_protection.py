@@ -1,3 +1,5 @@
+import time
+
 from app.mt5.position_controller import PositionController, _log_close
 
 
@@ -18,6 +20,12 @@ class ATRProtectionManager:
         partial_close=False,
         early_tp_atr=0.65,
         early_pullback_atr=0.25,
+        be_buffer_atr=0.0,
+        fast_tp_usd=2.5,
+        stall_start_usd=1.0,
+        stall_seconds=60,
+        loser_seconds=600,
+        loser_min_profit=0.0,
     ):
         self.sl_atr_mult = sl_atr_mult
         self.be_trigger_atr = be_trigger_atr
@@ -32,14 +40,24 @@ class ATRProtectionManager:
         self.partial_close = partial_close
         self.early_tp_atr = early_tp_atr
         self.early_pullback_atr = early_pullback_atr
+        self.be_buffer_atr = be_buffer_atr
+        self.fast_tp_usd = fast_tp_usd
+        self.stall_start_usd = stall_start_usd
+        self.stall_seconds = stall_seconds
+        self.loser_seconds = loser_seconds
+        self.loser_min_profit = loser_min_profit
 
         self.controller = PositionController()
         self._partial_done = set()
         self._peak_price = {}
+        self._stall_start = {}
+        self._ever_profit = set()
 
     def cleanup(self, active_tickets):
         self._partial_done = {t for t in self._partial_done if t in active_tickets}
         self._peak_price = {t: p for t, p in self._peak_price.items() if t in active_tickets}
+        self._stall_start = {t: s for t, s in self._stall_start.items() if t in active_tickets}
+        self._ever_profit = {t for t in self._ever_profit if t in active_tickets}
 
     def attach_initial_sl(self, position, atr):
         dist = self.sl_atr_mult * atr
@@ -87,6 +105,51 @@ class ATRProtectionManager:
                     return {"status": "PARTIAL", "action": "PARTIAL_CLOSE",
                             "reason": f"Tutup {self.partial_pct:.0%} di {self.partial_trigger_atr:.1f}xATR ({partial_trigger:.2f}).",
                             "ticket": position.ticket, "result": result}
+
+        now = time.time()
+
+        # ======================================
+        # LOSER EXIT: posisi tidak pernah profit
+        # dalam loser_seconds -> close loss kecil.
+        # ======================================
+        if position.profit >= self.loser_min_profit:
+            self._ever_profit.add(position.ticket)
+        elif position.ticket not in self._ever_profit:
+            open_age = now - float(position.time)
+            if open_age >= self.loser_seconds:
+                _log_close("LOSER_EXIT", position.ticket, position.symbol, position.profit)
+                result = self.controller.close(position, caller="LOSER_EXIT")
+                return {"status": "CLOSED", "action": "LOSER_EXIT",
+                        "reason": f"Posisi belum pernah profit ({self.loser_min_profit:.2f}) "
+                                  f"setelah {open_age / 60:.1f} menit -> close loss kecil.",
+                        "ticket": position.ticket, "result": result}
+
+        # ======================================
+        # FAST TP: profit sudah >= target USD -> langsung close.
+        # ======================================
+        if position.profit >= self.fast_tp_usd:
+            _log_close("FAST_TP", position.ticket, position.symbol, position.profit)
+            result = self.controller.close(position, caller="FAST_TP")
+            return {"status": "CLOSED", "action": "FAST_TP",
+                    "reason": f"Profit {position.profit:.2f} sudah >= target {self.fast_tp_usd:.2f} USD.",
+                    "ticket": position.ticket, "result": result}
+
+        # ======================================
+        # STALL EXIT: profit stabil di sekitar stall_start_usd
+        # tanpa naik ke FAST_TP selama stall_seconds -> close.
+        # ======================================
+        if position.profit >= self.stall_start_usd:
+            if position.ticket not in self._stall_start:
+                self._stall_start[position.ticket] = now
+            elif now - self._stall_start[position.ticket] >= self.stall_seconds:
+                _log_close("STALL_EXIT", position.ticket, position.symbol, position.profit)
+                result = self.controller.close(position, caller="STALL_EXIT")
+                return {"status": "CLOSED", "action": "STALL_EXIT",
+                        "reason": f"Profit {position.profit:.2f} mandek >= {self.stall_start_usd:.2f} "
+                                  f"selama {self.stall_seconds}s tanpa naik ke {self.fast_tp_usd:.2f} USD.",
+                        "ticket": position.ticket, "result": result}
+        else:
+            self._stall_start.pop(position.ticket, None)
 
         # ======================================
         # Early TP: lock profit kecil ~2.5x kalau harga mandek/balik,
@@ -174,7 +237,7 @@ class ATRProtectionManager:
         be_trigger = self.be_trigger_atr * atr
         if position.profit >= be_trigger:
             if position.sl == 0 or (is_buy and position.sl < position.price_open) or (not is_buy and position.sl > position.price_open):
-                spread_buffer = atr * 0.05
+                spread_buffer = atr * self.be_buffer_atr
                 if is_buy:
                     be_sl = round(position.price_open - spread_buffer, 5)
                 else:

@@ -78,13 +78,13 @@ class MultiTimeframeConfirmation:
                     "adx": last["ADX"]
                 }
 
-                if signal == "BUY" and trend == "UP":
-                    aligned += 1
-                elif signal == "SELL" and trend == "DOWN":
-                    aligned += 1
+                if signal == "BUY":
+                    if trend == "UP":
+                        aligned += 1
+                elif signal == "SELL":
+                    if trend == "DOWN":
+                        aligned += 1
                 elif signal == "HOLD":
-                    aligned += 1
-                elif trend == "SIDEWAYS":
                     aligned += 1
 
                 total += 1
@@ -102,11 +102,11 @@ class MultiTimeframeConfirmation:
 
         alignment_pct = aligned / total if total > 0 else 0
 
-        tf_confirmed = alignment_pct >= 0.5
+        tf_confirmed = alignment_pct >= 1.0
 
         if not tf_confirmed:
             reason = (
-                f"Higher TF menolak ({aligned}/{total} searah)"
+                f"Higher TF menolak ({aligned}/{total} searah, butuh semua searah)"
             )
         elif alignment_pct == 1.0:
             reason = "Semua timeframe searah."

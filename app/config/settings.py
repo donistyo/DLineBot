@@ -65,7 +65,7 @@ SYMBOL_TRADE_PARAMS = {
     },
     "BTCUSDTc": {
         "max_spread": 3000,    # dalam poin
-        "min_atr": 100,        # dalam poin harga
+        "min_atr": 8,          # dalam poin harga
         "session": (0, 23),    # 24/7
         "model_prefix": "btcusdtc",
         "point": 0.01,         # ukuran point harga simbol
@@ -75,7 +75,7 @@ SYMBOL_TRADE_PARAMS = {
     },
     "BTCUSDc": {
         "max_spread": 3000,    # dalam poin
-        "min_atr": 100,        # dalam poin harga
+        "min_atr": 8,          # dalam poin harga
         "session": (0, 23),    # 24/7
         "model_prefix": "btcusdtc",
         "point": 0.01,         # ukuran point harga simbol

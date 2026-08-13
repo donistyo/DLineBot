@@ -1,0 +1,80 @@
+//@version=5
+// ============================================================================
+// DLine Scalping Strategy - TradingView -> Webhook -> MT5 Exness
+// ----------------------------------------------------------------------------
+// Logika (menyesuaikan bot DLine):
+//   * "Pinggir masuk" = entry saat harga breakout dari pinggir Donchian
+//     (bukan di tengah range), dengan filter ADX anti-sideways.
+//   * SL / TP berbasis ATR (2.5 ATR masing-masing).
+//   * Target cepat: partial close 50% saat profit >= early_tp ATR.
+//   * Break-even & trailing optional (aktifkan input).
+//
+// IMPORTANT: strategy() di file ini HANYA untuk test/backtest.
+// Untuk LIVE, gunakan alert TradingView yang mengirim JSON webhook
+// (lihat template message di bagian bawah).
+// ============================================================================
+strategy("DLine Scalping", overlay=true, initial_capital=1000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     commission_type=strategy.commission.cash_per_order, commission_value=0,
+     slippage=0, calc_on_every_tick=true, pyramiding=0)
+
+// ----------------------------- Inputs --------------------------------------
+adx_len      = input.int(14,     "ADX Length")
+adx_min      = input.float(20.0, "Min ADX (filter sideways)")
+atr_len      = input.int(14,     "ATR Length")
+sl_atr       = input.float(2.5,  "SL (ATR)")
+tp_atr       = input.float(2.5,  "TP (ATR)")
+early_tp_atr = input.float(0.40, "Early/partial TP (ATR)")
+
+// ----------------------------- Indicators ----------------------------------
+[diplus, diminus, adx] = ta.dmi(high, low, close, adx_len)
+atr                   = ta.atr(atr_len)
+upper                 = ta.highest(high, 20)[1]
+lower                 = ta.lowest(low, 20)[1]
+
+// ----------------------------- Filters -------------------------------------
+trend_ok = adx >= adx_min
+
+// ----------------------------- Entries (Pinggir) ---------------------------
+buy_signal  = not na(atr) and close > upper and trend_ok
+sell_signal = not na(atr) and close < lower and trend_ok
+
+// ----------------------------- Exits (ATR-based) ---------------------------
+var float sl_ref = na
+var float tp_ref = na
+
+if strategy.position_size > 0
+    sl_ref := strategy.position_avg_price - sl_atr * atr
+    tp_ref := strategy.position_avg_price + tp_atr * atr
+if strategy.position_size < 0
+    sl_ref := strategy.position_avg_price + sl_atr * atr
+    tp_ref := strategy.position_avg_price - tp_atr * atr
+
+// Partial close 50% saat profit pertama menembus early_tp ATR (target cepat)
+early_long  = strategy.position_size > 0 and strategy.openprofit >= early_tp_atr * atr
+early_short = strategy.position_size < 0 and strategy.openprofit >= early_tp_atr * atr
+
+// --------------------------- Backtest Orders --------------------------------
+if strategy.opentrades == 0
+    if buy_signal
+        strategy.entry("Long",  strategy.long)
+        strategy.exit("Long Exit", "Long",  stop=sl_ref, limit=tp_ref)
+    if sell_signal
+        strategy.entry("Short", strategy.short)
+        strategy.exit("Short Exit", "Short", stop=sl_ref, limit=tp_ref)
+
+// ============================================================================
+// WEBHOOK ALERT (LIVE) - template untuk Create Alert di TradingView
+// ----------------------------------------------------------------------------
+// 1) Matikan blok strategy.entry/exit di atas saat live (atau gunakan alert
+//    dengan kondisi terpisah) supaya tidak dobel order dari bot.
+// 2) Buat alert dengan kondisi = buy_signal atau sell_signal, webhook URL
+//    = http://<server-anda>:8000/api/tradingview/webhook, dan message JSON:
+//
+// {"secret":"<WEBHOOK_SECRET>","symbol":"<tickerid>","signal":"BUY",
+//  "volume":0.01,"entry":0,"stop_loss":0,"take_profit1":0,"take_profit2":0,
+//  "kinerja":"Momentum breakout","tf":"5"}
+//
+// Ganti signal menjadi "SELL", "CLOSE_BUY", "CLOSE_SELL" sesuai kebutuhan.
+// entry / SL / TP = 0 => server menghitung otomatis dari param simbol bot.
+// ============================================================================

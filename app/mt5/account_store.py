@@ -57,15 +57,24 @@ def first_symbol_for_login(login):
     return symbols[0] if symbols else "XAUUSDc"
 
 
+PRIORITY_SYMBOLS = ["XAUUSDc", "BTCUSDc", "ETHUSDc", "XAGUSDc"]
+
+
 def get_account_symbols(login):
     login = str(login)
+    saved = []
     for a in get_saved_accounts():
         if str(a.get("login")) == login:
-            symbols = a.get("symbols") or []
-            if symbols:
-                return symbols
-            return ["XAUUSDc"]
-    return ["XAUUSDc"]
+            saved = a.get("symbols") or []
+            break
+    if saved:
+        base = saved
+    else:
+        base = []
+    for s in PRIORITY_SYMBOLS:
+        if s not in base:
+            base.append(s)
+    return base or ["XAUUSDc"]
 
 
 def clear_active_account():

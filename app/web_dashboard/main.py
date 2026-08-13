@@ -203,6 +203,9 @@ def _start_learning_loop():
 
 app = FastAPI(title="DLine")
 
+from app.tradingview.webhook import router as tradingview_router
+app.include_router(tradingview_router)
+
 
 @app.on_event("startup")
 def _startup():
@@ -1174,6 +1177,72 @@ def api_analytics_summary():
     }
 
 
+@app.get("/api/analytics/recap")
+def api_analytics_recap(days=30):
+    """Rekap autotrade langsung dari MT5 history deals (entry battle bot)."""
+    try:
+        MT5Session.ensure_connection()
+        now = datetime.now()
+        start = now - timedelta(days=int(days))
+        deals = mt5.history_deals_get(start, now, group="*")
+        if not deals:
+            return {"ok": True, "empty": True, "total": 0, "net_profit": 0.0,
+                    "win_rate": 0, "days": int(days), "daily": [], "worst": []}
+
+        from collections import defaultdict
+        bot = [d for d in deals
+               if d.entry == 1 and d.comment and "DLineBot" in str(d.comment)]
+
+        total = len(bot)
+        wins = len([d for d in bot if d.profit > 0])
+        losses = len([d for d in bot if d.profit < 0])
+        evens = total - wins - losses
+        net = sum(d.profit for d in bot)
+
+        by_day = defaultdict(lambda: {"profit": 0.0, "count": 0, "win": 0, "loss": 0})
+        for d in bot:
+            t = datetime.fromtimestamp(d.time)
+            day = t.strftime("%Y-%m-%d")
+            by_day[day]["profit"] += d.profit
+            by_day[day]["count"] += 1
+            if d.profit > 0:
+                by_day[day]["win"] += 1
+            elif d.profit < 0:
+                by_day[day]["loss"] += 1
+
+        daily = [{"day": k, "profit": round(v["profit"], 2), "count": v["count"],
+                  "win": v["win"], "loss": v["loss"]}
+                 for k, v in sorted(by_day.items())]
+
+        worst = []
+        for d in sorted(bot, key=lambda x: x.profit)[:5]:
+            t = datetime.fromtimestamp(d.time)
+            dirn = "BUY" if d.type == 0 else "SELL"
+            worst.append({
+                "time": t.strftime("%d/%m %H:%M"),
+                "type": dirn,
+                "price": d.price,
+                "volume": d.volume,
+                "profit": round(d.profit, 2)
+            })
+
+        return {
+            "ok": True,
+            "empty": False,
+            "days": int(days),
+            "total": total,
+            "win": wins,
+            "loss": losses,
+            "even": evens,
+            "win_rate": round(wins / total * 100, 1) if total else 0,
+            "net_profit": round(net, 2),
+            "daily": daily,
+            "worst": worst
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/logo")
 def serve_logo():
     logo_path = Path("DIMAS (1).png")
@@ -1232,6 +1301,12 @@ h2:before { content:''; display:inline-block; width:3px; height:14px; background
 .purple { color:#a78bfa; }
 table { width:100%; border-collapse:separate; border-spacing:0; background:rgba(30,41,59,0.5); backdrop-filter:blur(4px); border-radius:10px; overflow:hidden; font-size:11px; border:1px solid rgba(59,130,246,0.08); }
 .table-wrap { overflow-x:auto; border-radius:10px; }
+.recap-table { width:100%; border-collapse:separate; border-spacing:0; background:rgba(30,41,59,0.5); backdrop-filter:blur(4px); border-radius:10px; overflow:hidden; font-size:11px; border:1px solid rgba(59,130,246,0.08); }
+.recap-table th { background:rgba(51,65,85,0.5); text-align:left; padding:6px 8px; color:#94a3b8; text-transform:uppercase; font-size:9px; letter-spacing:0.3px; }
+.recap-table td { padding:5px 8px; border-top:1px solid rgba(51,65,85,0.3); }
+.recap-table tr:hover td { background:rgba(59,130,246,0.05); }
+.pos { color:#6ee7b7; }
+.neg { color:#fca5a5; }
 th { background:rgba(51,65,85,0.5); text-align:left; padding:6px 8px; color:#94a3b8; text-transform:uppercase; font-size:9px; letter-spacing:0.3px; }
 td { padding:5px 8px; border-top:1px solid rgba(51,65,85,0.3); }
 tr:hover td { background:rgba(59,130,246,0.05); }
@@ -1298,6 +1373,49 @@ tr:hover td { background:rgba(59,130,246,0.05); }
   .card .val { font-size:13px; }
   .chart-container { padding:8px; }
 }
+/* ===== TradingView monitor panel ===== */
+.tv-main { display:grid; grid-template-columns:1fr 340px; gap:12px; }
+@media(max-width:980px){ .tv-main { grid-template-columns:1fr; } }
+.tv-chart { background:rgba(30,41,59,0.5); border:1px solid rgba(59,130,246,0.08); border-radius:10px; padding:10px; min-height:560px; }
+.tv-side { display:flex; flex-direction:column; gap:12px; }
+.tv-signal { background:rgba(30,41,59,0.6); border:1px solid rgba(59,130,246,0.08); border-radius:10px; padding:14px; }
+.tv-signal-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.tv-signal-head .lbl { font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; }
+.tv-signal-main { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+.tv-dir { font-family:'JetBrains Mono',monospace; font-size:26px; font-weight:700; letter-spacing:0.5px; }
+.tv-score { text-align:right; }
+.tv-score .num { font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:600; }
+.tv-score .lbl { font-size:10px; color:#64748b; text-transform:uppercase; }
+.tv-align { display:flex; flex-direction:column; gap:8px; }
+.tv-align-row { display:flex; align-items:center; gap:10px; }
+.tv-align-tf { font-family:'JetBrains Mono',monospace; font-size:11px; color:#94a3b8; width:32px; }
+.tv-align-track { flex:1; height:8px; background:rgba(15,23,42,0.9); border-radius:99px; position:relative; overflow:hidden; border:1px solid rgba(51,65,85,0.5); }
+.tv-align-fill { position:absolute; top:0; bottom:0; border-radius:99px; }
+.tv-align-fill.up { background:linear-gradient(90deg, rgba(110,231,183,0.15), #6ee7b7); left:50%; }
+.tv-align-fill.down { background:linear-gradient(90deg, #fca5a5, rgba(252,165,165,0.15)); right:50%; }
+.tv-align-track::before { content:''; position:absolute; left:50%; top:-2px; bottom:-2px; width:1px; background:rgba(51,65,85,0.7); transform:translateX(-0.5px); }
+.tv-align-state { font-family:'JetBrains Mono',monospace; font-size:10px; width:34px; text-align:right; font-weight:600; }
+.tv-align-state.up { color:#6ee7b7; } .tv-align-state.down { color:#fca5a5; } .tv-align-state.side { color:#fbbf24; }
+.tv-note { display:flex; align-items:center; gap:8px; padding:9px 11px; margin-top:10px; background:rgba(59,130,246,0.1); border:1px solid rgba(59,130,246,0.3); border-radius:7px; font-size:11px; color:#60a5fa; }
+.tv-note b { font-family:'JetBrains Mono',monospace; }
+.tv-pos { background:rgba(30,41,59,0.6); border:1px solid rgba(59,130,246,0.08); border-radius:10px; padding:14px; }
+.tv-pos-row { display:flex; justify-content:space-between; align-items:center; font-size:12px; padding:4px 0; }
+.tv-pos-row .k { color:#94a3b8; } .tv-pos-row .v { font-family:'JetBrains Mono',monospace; font-weight:600; }
+.tv-pnl { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; background:rgba(15,23,42,0.9); border:1px solid rgba(51,65,85,0.5); border-radius:8px; margin-top:6px; }
+.tv-pnl .pnl-lbl { font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; }
+.tv-pnl .pnl-val { font-family:'JetBrains Mono',monospace; font-size:18px; font-weight:700; }
+.tv-risk { background:rgba(30,41,59,0.6); border:1px solid rgba(59,130,246,0.08); border-radius:10px; padding:14px; }
+.tv-risk-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.tv-risk-cell { background:rgba(15,23,42,0.9); border:1px solid rgba(51,65,85,0.5); border-radius:7px; padding:10px 12px; }
+.tv-risk-cell .k { font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.4px; }
+.tv-risk-cell .v { font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:600; margin-top:3px; }
+.tv-status-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+.tv-pill { display:flex; align-items:center; gap:7px; padding:7px 14px; border-radius:99px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:600; letter-spacing:0.4px; }
+.tv-pill .dot { width:7px; height:7px; border-radius:50%; background:#fca5a5; box-shadow:0 0 8px #fca5a5; }
+.tv-pill.on { background:rgba(110,231,183,0.1); border:1px solid rgba(110,231,183,0.35); color:#6ee7b7; }
+.tv-pill.on .dot { background:#6ee7b7; box-shadow:0 0 8px #6ee7b7; }
+.tv-pill.off { background:rgba(252,165,165,0.08); border:1px solid rgba(252,165,165,0.3); color:#fca5a5; }
+.tv-pill.off .dot { background:#fca5a5; }
 </style>
 </head>
 <body>
@@ -1319,14 +1437,14 @@ tr:hover td { background:rgba(59,130,246,0.05); }
   <div class="sidebar-item" onclick="switchTab('manual',this)">
     <span class="sidebar-icon">&#9998;</span><span>Manual Order</span>
   </div>
-  <div class="sidebar-item" onclick="switchTab('grid',this)">
-    <span class="sidebar-icon">&#9776;</span><span>Grid &amp; Pending</span>
-  </div>
   <div class="sidebar-item" onclick="switchTab('scalping',this)">
     <span class="sidebar-icon">&#9889;</span><span>Scalping</span>
   </div>
   <div class="sidebar-item" onclick="switchTab('intraday',this)">
     <span class="sidebar-icon">&#128202;</span><span>Intraday</span>
+  </div>
+  <div class="sidebar-item" onclick="switchTab('tradingview',this)">
+    <span class="sidebar-icon">&#128305;</span><span>TradingView</span>
   </div>
   <div class="sidebar-item" onclick="switchTab('settings',this)">
     <span class="sidebar-icon">&#9881;</span><span>Settings</span>
@@ -1353,9 +1471,9 @@ tr:hover td { background:rgba(59,130,246,0.05); }
   <div class="sidebar-item" onclick="switchTab('analytics',this)"><span class="sidebar-icon">&#9881;</span><span>Analytics</span></div>
   <div class="sidebar-item" onclick="switchTab('learning',this)"><span class="sidebar-icon">&#9855;</span><span>AI Learning</span></div>
   <div class="sidebar-item" onclick="switchTab('manual',this)"><span class="sidebar-icon">&#9998;</span><span>Manual Order</span></div>
-  <div class="sidebar-item" onclick="switchTab('grid',this)"><span class="sidebar-icon">&#9776;</span><span>Grid & Pending</span></div>
   <div class="sidebar-item" onclick="switchTab('scalping',this)"><span class="sidebar-icon">&#9889;</span><span>Scalping</span></div>
   <div class="sidebar-item" onclick="switchTab('intraday',this)"><span class="sidebar-icon">&#128202;</span><span>Intraday</span></div>
+  <div class="sidebar-item" onclick="switchTab('tradingview',this)"><span class="sidebar-icon">&#128305;</span><span>TradingView</span></div>
   <div class="sidebar-item" onclick="switchTab('settings',this)"><span class="sidebar-icon">&#9881;</span><span>Settings</span></div>
 </div>
 
@@ -1388,6 +1506,18 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 
 <h2>Win Rate</h2>
 <div class="grid" id="winRateBox"></div>
+
+<h2>Rekap Autotrade (MT5 History)</h2>
+<div class="grid" id="recapSummaryBox" style="margin-bottom:8px"></div>
+<div style="overflow-x:auto">
+  <table class="recap-table"><thead><tr>
+    <th>Tanggal</th><th>Trade</th><th>Win</th><th>Loss</th><th>Net Profit</th>
+  </tr></thead><tbody id="recapDaily"></tbody></table>
+</div>
+<div style="margin-top:8px;font-size:12px;color:#94a3b8">
+  <b>5 Loss Terbesar</b>
+  <div id="recapWorst" style="margin-top:4px"></div>
+</div>
 
 <div class="chart-grid">
   <div class="chart-container"><canvas id="monthlyProfitChart" height="150"></canvas></div>
@@ -1612,6 +1742,88 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 
 </div>
 
+<div id="tab-tradingview" style="display:none">
+
+<div class="tv-toolbar" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+  <label style="font-size:11px;color:#94a3b8">Symbol
+    <select id="tvSymbolSel" onchange="changeTVSymbol()" style="width:130px;padding:7px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:6px;margin-left:6px"></select>
+  </label>
+  <label style="font-size:11px;color:#94a3b8">Lot
+    <input id="tvLotIn" type="number" step="0.01" min="0.01" value="0.01" onchange="changeTVLot()" style="width:90px;padding:7px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:6px;margin-left:6px">
+  </label>
+  <span id="tvLotSaved" style="font-size:11px;color:#6ee7b7"></span>
+  <div style="flex:1"></div>
+</div>
+
+<div class="tv-status-bar">
+  <div class="tv-pill off" id="tvPillWebhook"><span class="dot"></span><span id="tvPillWebhookTxt">WEBHOOK OFF</span></div>
+  <div class="tv-pill off" id="tvPillAuto" onclick="toggleAutoTrade()" style="cursor:pointer" title="Klik untuk ON/OFF autotrade"><span class="dot"></span><span id="tvPillAutoTxt">AUTOTRADE OFF</span></div>
+  <div class="tv-pill off" id="tvPillSecret"><span class="dot"></span><span id="tvPillSecretTxt">SECRET KOSONG</span></div>
+  <div style="flex:1"></div>
+  <button onclick="toggleAutoTrade()" id="btnAutoToggle" style="padding:8px 16px;background:#334155;color:#94a3b8;border:1px solid rgba(59,130,246,0.2);border-radius:6px;font-weight:600;cursor:pointer">AUTOTRADE OFF</button>
+  <button onclick="toggleTV()" id="btnTVToggle" style="padding:8px 16px;background:#22c55e;color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer">AKTIFKAN WEBHOOK</button>
+</div>
+
+<div class="tv-main">
+
+  <div class="tv-chart">
+    <div class="tv-signal-head">
+      <span class="lbl">Chart — <span id="tvSymbolTitle">XAUUSDc</span></span>
+      <span class="lbl" style="color:#60a5fa">TradingView</span>
+    </div>
+    <div id="tv_chart" style="min-height:520px;border-radius:8px;overflow:hidden"></div>
+  </div>
+
+  <div class="tv-side">
+
+    <div class="tv-signal">
+      <div class="tv-signal-head">
+        <span class="lbl">Sinyal Saat Ini</span>
+        <span class="lbl" style="color:#6ee7b7">LIVE</span>
+      </div>
+      <div class="tv-signal-main">
+        <div class="tv-dir" id="tvSignalDir" style="color:#fbbf24">WAIT</div>
+        <div class="tv-score"><div class="num" id="tvSignalScore">0</div><div class="lbl">Score</div></div>
+      </div>
+      <div class="tv-align" id="tvAlignStrip"></div>
+      <div class="tv-note" id="tvAlignNote"><span>&#9685;</span><span>Memuat alignment timeframe...</span></div>
+    </div>
+
+    <div class="tv-pos">
+      <div class="tv-signal-head">
+        <span class="lbl">Posisi Aktif</span>
+        <span class="lbl" id="tvPosTag" style="color:#64748b">TIDAK ADA</span>
+      </div>
+      <div id="tvPosBody"><div style="font-size:12px;color:#64748b;padding:8px 0">Tidak ada posisi terbuka.</div></div>
+    </div>
+
+    <div class="tv-risk">
+      <div class="tv-signal-head"><span class="lbl">Risk &amp; Filter</span></div>
+      <div class="tv-risk-grid" id="tvRiskGrid"></div>
+    </div>
+
+  </div>
+</div>
+
+<div style="margin-top:12px">
+<div id="tvEndpoint" style="font-size:12px;color:#94a3b8;background:#1e293b;border-radius:6px;padding:10px 14px;margin-bottom:10px;word-break:break-all"></div>
+
+<div id="tvGuide" style="font-size:12px;color:#94a3b8;background:#1e293b;border-radius:6px;padding:12px 14px;margin-bottom:12px;line-height:1.7">
+  <b style="color:#e2e8f0">Cara setup di TradingView:</b><br>
+  1. Buka <b>strategies/dline_scalping.pine</b> dan buat alert.<br>
+  2. Webhook URL = endpoint di atas.<br>
+  3. Message JSON (isi secret dari .env):
+  <code id="tvSample" style="display:block;background:#0f172a;color:#a5b4fc;border-radius:4px;padding:8px;margin-top:6px;font-size:11px"></code>
+</div>
+</div>
+
+<h2>Log Sinyal TradingView</h2>
+<div class="table-wrap"><table><thead><tr>
+  <th>Waktu</th><th>Symbol</th><th>Signal</th><th>Status</th><th>Alasan</th><th>Lot</th><th>Harga</th><th>Ticket</th>
+</tr></thead><tbody id="tvSignalsBody"><tr><td colspan="8" style="color:#64748b">Belum ada sinyal.</td></tr></tbody></table></div>
+
+</div>
+
 <div id="tab-settings" style="display:none">
 
 <h2>Account MT5</h2>
@@ -1629,8 +1841,6 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 
 <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
   <button onclick="reloadAccountStatus()" style="padding:8px 14px;background:#334155;color:#e2e8f0;border:none;border-radius:4px;cursor:pointer">&#128260; Refresh</button>
-  <button onclick="setAutoTradeAfterSwitch(true)" id="btnAutoReenable" style="padding:8px 14px;background:#22c55e;color:#fff;border:none;border-radius:4px;cursor:pointer">Aktifkan Auto-Trade</button>
-  <button onclick="setAutoTradeAfterSwitch(false)" style="padding:8px 14px;background:#ef4444;color:#fff;border:none;border-radius:4px;cursor:pointer">Matikan Auto-Trade</button>
 </div>
 
 <h2 style="margin-top:18px">Symbol Trading</h2>
@@ -1703,13 +1913,6 @@ function switchTab(name, el) {
     fetchAutoTradeMonitor();
     fetchManualChart();
   }
-  if (name === 'grid') {
-    fetchGridStatus();
-    fetchManagePositions();
-    fetchAutoTradeMonitor();
-    loadAutoTradeEnabled();
-    fetchPriceChart('priceChartGrid');
-  }
   if (name === 'learning' && !learningLoaded) {
     learningLoaded = true;
     fetchLearningRecords();
@@ -1723,6 +1926,12 @@ function switchTab(name, el) {
   if (name === 'settings') {
     loadAccountStatus();
     loadSavedAccounts();
+  }
+  if (name === 'tradingview') {
+    syncTVControls();
+    loadTVSymbols();
+    fetchTVMonitor();
+    fetchTVSignals();
   }
 }
 
@@ -1996,6 +2205,8 @@ async function fetchAnalytics() {
       <div class="card"><div class="lbl">Win Rate</div><div class="val yellow">${wr.win_rate??0}%</div></div>
     `;
 
+    fetchRecap();
+
     if (monthly.length > 0) {
       makeChart('monthlyProfitChart', 'bar', monthly.map(m=>m.month), [
         { label:'Profit', data:monthly.map(m=>m.profit), backgroundColor:monthly.map(m=>m.profit>=0?'rgba(110,231,183,0.7)':'rgba(252,165,165,0.7)'), borderColor:monthly.map(m=>m.profit>=0?'#6ee7b7':'#fca5a5'), borderWidth:1 }
@@ -2064,6 +2275,43 @@ async function fetchAnalytics() {
     }
 
   } catch(e) { console.error('Analytics error:', e); }
+}
+
+async function fetchRecap() {
+  try {
+    const r = await fetchJson('/api/analytics/recap?days=30', {ok:false,empty:true,total:0,net_profit:0,win_rate:0,daily:[],worst:[]});
+    const wrap = document.getElementById('recapSummaryBox');
+    const dailyBody = document.getElementById('recapDaily');
+    const worstBox = document.getElementById('recapWorst');
+    if (!wrap || !dailyBody || !worstBox) return;
+    if (!r.ok || r.empty) {
+      wrap.innerHTML = '<div class="card"><div class="lbl">Rekap</div><div class="val yellow">Belum ada data</div></div>';
+      dailyBody.innerHTML = '<tr><td colspan="5" style="color:#64748b;text-align:center">Belum ada trade DLineBot dalam 30 hari</td></tr>';
+      worstBox.innerHTML = '<span style="color:#64748b">-</span>';
+      return;
+    }
+    wrap.innerHTML = `
+      <div class="card"><div class="lbl">Total Trades</div><div class="val">${r.total??0}</div></div>
+      <div class="card"><div class="lbl">Win</div><div class="val green">${r.win??0}</div></div>
+      <div class="card"><div class="lbl">Loss</div><div class="val red">${r.loss??0}</div></div>
+      <div class="card"><div class="lbl">Even</div><div class="val">${r.even??0}</div></div>
+      <div class="card"><div class="lbl">Win Rate</div><div class="val yellow">${r.win_rate??0}%</div></div>
+      <div class="card"><div class="lbl">Net Profit</div><div class="val ${(r.net_profit||0)>=0?'green':'red'}">${(r.net_profit||0)>=0?'+':''}$${(r.net_profit||0).toFixed(2)}</div></div>
+    `;
+    dailyBody.innerHTML = (r.daily||[]).map(d => `
+      <tr>
+        <td>${d.day}</td>
+        <td>${d.count}</td>
+        <td class="pos">${d.win}</td>
+        <td class="neg">${d.loss}</td>
+        <td class="${d.profit>=0?'pos':'neg'}">${d.profit>=0?'+':''}$${d.profit.toFixed(2)}</td>
+      </tr>`).join('') || '<tr><td colspan="5" style="color:#64748b;text-align:center">-</td></tr>';
+    worstBox.innerHTML = (r.worst||[]).map(w => `
+      <div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px solid rgba(51,65,85,0.3)">
+        <span>${w.time} ${w.type} @${w.price.toFixed(2)} lot:${w.volume}</span>
+        <span class="neg">$${w.profit.toFixed(2)}</span>
+      </div>`).join('') || '<span style="color:#64748b">-</span>';
+  } catch(e) { console.error('Recap error:', e); }
 }
 
 // =====================================
@@ -2506,22 +2754,6 @@ setInterval(fetchPublicUrl, 30000);
 setInterval(() => { if (analyticsLoaded && document.getElementById('tab-analytics').style.display !== 'none') fetchAnalytics(); }, 30000);
 setInterval(() => { if (learningLoaded && document.getElementById('tab-learning').style.display !== 'none') fetchLearningRecords(); }, 45000);
 
-// Grid tab auto-refresh every 1 detik
-setInterval(() => {
-  if (document.getElementById('tab-grid') && document.getElementById('tab-grid').style.display !== 'none') {
-    fetchGridStatus();
-    fetchManagePositions();
-    fetchAutoTradeMonitor();
-  }
-}, 1000);
-
-// Price chart refresh every 15 detik (di grid tab)
-setInterval(() => {
-  if (document.getElementById('tab-grid') && document.getElementById('tab-grid').style.display !== 'none') {
-    fetchPriceChart('priceChartGrid');
-  }
-}, 15000);
-
 // Manual chart + monitor refresh every 10 detik
 setInterval(() => {
   if (document.getElementById('tab-manual') && document.getElementById('tab-manual').style.display !== 'none') {
@@ -2762,6 +2994,355 @@ async function addSavedAccount() {
     resEl.textContent = d.error || 'Gagal simpan';
   }
 }
+// =====================================
+// TradingView tab
+// =====================================
+let tvWidget = null;
+let tvWidgetSymbol = '';
+let tvWidgetIdent = '';
+
+function tvPill(id, on, label) {
+  const pill = document.getElementById(id);
+  if (!pill) return;
+  pill.className = 'tv-pill ' + (on ? 'on' : 'off');
+  const txt = document.getElementById(id + 'Txt');
+  if (txt) txt.textContent = label;
+}
+
+const TV_THEMES = {
+  navy: { theme: 'dark', bg: '#0c1222', toolbar: '#111a2e', textColor: '#c8d2e8' },
+  dark: { theme: 'dark', bg: '#131722', toolbar: '#1e222d', textColor: '#d1d4dc' },
+  light:{ theme: 'light', bg: '#ffffff',  toolbar: '#f8f8f8', textColor: '#131722' },
+};
+
+function tvConfig(symbol, interval, style) {
+  const c = TV_THEMES.navy;
+  return {
+    "width": "100%", "height": 520,
+    "symbol": symbol, "interval": interval,
+    "timezone": "Asia/Jakarta",
+    "theme": c.theme, "style": style, "locale": "id",
+    "backgroundColor": c.bg,
+    "toolbar_bg": c.toolbar,
+    "gridColor": "rgba(148,163,184,0.08)",
+    "hide_top_toolbar": false, "hide_legend": false,
+    "save_image": false, "container_id": "tv_chart"
+  };
+}
+
+function initTVChart(symbol, opts) {
+  opts = opts || {};
+  const interval = opts.interval || localStorage.getItem('tv_interval') || '1';
+  const style = '3';
+  const tvSymbol = tvMapSymbol(symbol);
+  const ident = tvSymbol + '|' + interval + '|' + style + '|navy';
+  if (tvWidget && tvWidgetSymbol === tvSymbol && tvWidgetIdent === ident) return;
+  const el = document.getElementById('tv_chart');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!window.TradingView) {
+    const s = document.createElement('script');
+    s.src = 'https://s3.tradingview.com/tv.js';
+    s.onload = () => initTVChart(symbol, opts);
+    el.innerHTML = '<div style="padding:60px;text-align:center;color:#64748b">Memuat TradingView...</div>';
+    document.head.appendChild(s);
+    return;
+  }
+  try {
+    tvWidget = new TradingView.widget(tvConfig(tvSymbol, interval, style));
+    tvWidgetSymbol = tvSymbol;
+    tvWidgetIdent = ident;
+  } catch(e) { console.error('TV widget:', e); }
+}
+
+function rebuildTVChart() {
+  const sym = document.getElementById('tvSymbolTitle').textContent || 'XAUUSDc';
+  initTVChart(sym, {});
+}
+
+// Tidak ada dropdown tema/style; seluruhnya paten ke tema dashboard (navy)
+function syncTVControls() {
+  const sym = document.getElementById('tvSymbolTitle').textContent || 'XAUUSDc';
+  initTVChart(sym, {});
+}
+
+function tvMapSymbol(symbol) {
+  const s = String(symbol || '').toUpperCase();
+  if (s.includes('BTC')) return 'BINANCE:BTCUSDT';
+  if (s.includes('ETH')) return 'BINANCE:ETHUSDT';
+  if (s.includes('XAU')) return 'OANDA:XAUUSD';
+  if (s.includes('XAG')) return 'OANDA:XAGUSD';
+  return s.replace(/c$/i, '');
+}
+
+async function fetchTVMonitor() {
+  const [st, scalp, mtf, mon] = await Promise.all([
+    fetchJson('/api/tradingview/status', {enabled:false, secret_set:false, auto_trade_enabled:false, lot_size:0.01}),
+    fetchJson('/api/scalping', {scalp_score:{score:0,grade:'-',direction:'NEUTRAL',action:'WAIT'}}),
+    fetchJson('/api/tradingview/multi-tf', {symbol:'XAUUSDc', tfs:{}}),
+    fetchJson('/api/auto-trade/monitor', {account:{balance:0,equity:0}, positions:[], auto_trade_enabled:false, lot_size:0.01}),
+  ]);
+
+  // Pills status
+  tvPill('tvPillWebhook', st.enabled, 'WEBHOOK ' + (st.enabled ? 'ON' : 'OFF'));
+  tvPill('tvPillAuto', !!st.auto_trade_enabled, 'AUTOTRADE ' + (st.auto_trade_enabled ? 'ON' : 'OFF'));
+  tvPill('tvPillSecret', !!st.secret_set, st.secret_set ? 'SECRET OK' : 'SECRET KOSONG');
+  const btn = document.getElementById('btnTVToggle');
+  if (btn) {
+    btn.textContent = st.enabled ? 'MATIKAN WEBHOOK' : 'AKTIFKAN WEBHOOK';
+    btn.style.background = st.enabled ? '#ef4444' : '#22c55e';
+  }
+  const btnAuto = document.getElementById('btnAutoToggle');
+  if (btnAuto) {
+    btnAuto.textContent = 'AUTOTRADE ' + (st.auto_trade_enabled ? 'ON' : 'OFF');
+    btnAuto.style.background = st.auto_trade_enabled ? '#22c55e' : '#334155';
+    btnAuto.style.color = st.auto_trade_enabled ? '#fff' : '#94a3b8';
+  }
+
+  const symbol = mtf.symbol || mon.symbol || 'XAUUSDc';
+  document.getElementById('tvSymbolTitle').textContent = symbol;
+  initTVChart(symbol);
+
+  // Isi input lot dari config
+  const lotIn = document.getElementById('tvLotIn');
+  if (lotIn && st.lot_size != null) lotIn.value = Number(st.lot_size).toFixed(2);
+
+  // Endpoint + sample
+  const ep = document.getElementById('tvEndpoint');
+  if (ep) {
+    const base = window.location.origin || 'http://127.0.0.1:8000';
+    ep.innerHTML = '<b style="color:#e2e8f0">Webhook URL:</b> <code style="color:#a5b4fc">' + base + '/api/tradingview/webhook</code>';
+  }
+  const sample = document.getElementById('tvSample');
+  if (sample) {
+    sample.textContent = JSON.stringify({
+      secret: '<WEBHOOK_SECRET>', symbol: 'XAUUSDc', signal: 'BUY',
+      volume: st.lot_size || 0.01, entry: 0, stop_loss: 0,
+      take_profit1: 0, take_profit2: 0, kinerja: 'Momentum breakout', tf: '5'
+    }, null, 2);
+  }
+
+  renderTVSignal(scalp.scalp_score || {}, mtf.tfs || {});
+  renderTVPosition(mon.positions || []);
+  renderTVRisk(mon, st);
+}
+
+function renderTVSignal(ss, tfs) {
+  const dirEl = document.getElementById('tvSignalDir');
+  const scoreEl = document.getElementById('tvSignalScore');
+  const score = ss.score || 0;
+  const dir = String(ss.direction || ss.action || 'WAIT').toUpperCase();
+
+  scoreEl.textContent = Math.round(score);
+  let dirColor = '#fbbf24', dirLabel = 'WAIT';
+  if (dir === 'BUY') { dirColor = '#6ee7b7'; dirLabel = 'BUY'; }
+  else if (dir === 'SELL') { dirColor = '#fca5a5'; dirLabel = 'SELL'; }
+  dirEl.textContent = dirLabel;
+  dirEl.style.color = dirColor;
+
+  const strip = document.getElementById('tvAlignStrip');
+  const note = document.getElementById('tvAlignNote');
+  if (!strip) return;
+
+  const tfKeys = ['M1', 'M5', 'M15'];
+  const rows = [];
+  let aligned = 0, total = 0;
+  for (const tf of tfKeys) {
+    const t = (tfs || {})[tf] || {};
+    const trend = String(t.trend || 'NA').toUpperCase();
+    const state = trend === 'UP' ? 'up' : trend === 'DOWN' ? 'down' : 'side';
+    const label = trend === 'UP' ? 'BUY' : trend === 'DOWN' ? 'SELL' : 'SIDE';
+    const strength = (trend === 'UP' || trend === 'DOWN') ? 38 : 0;
+    if (trend !== 'NA') { total++; if (trend === 'UP' || trend === 'DOWN') aligned++; }
+    rows.push(
+      '<div class="tv-align-row">' +
+        '<span class="tv-align-tf">' + tf + '</span>' +
+        '<div class="tv-align-track"><div class="tv-align-fill ' + state + '" style="width:' + strength + '%"></div></div>' +
+        '<span class="tv-align-state ' + state + '">' + label + '</span>' +
+      '</div>'
+    );
+  }
+  strip.innerHTML = rows.join('');
+
+  // Note alignment
+  if (total === 0) {
+    note.innerHTML = '<span>&#9685;</span><span>Tidak ada data timeframe.</span>';
+  } else if (aligned === total && aligned > 0) {
+    note.innerHTML = '<span>&#9685;</span><span>Full alignment &mdash; <b>' + aligned + '/' + total + ' timeframe searah</b></span>';
+  } else {
+    note.innerHTML = '<span>&#9685;</span><span>' + aligned + '/' + total + ' timeframe searah.</span>';
+  }
+}
+
+function renderTVPosition(positions) {
+  const body = document.getElementById('tvPosBody');
+  const tag = document.getElementById('tvPosTag');
+  if (!body) return;
+  if (!positions.length) {
+    tag.textContent = 'TIDAK ADA';
+    tag.style.color = '#64748b';
+    body.innerHTML = '<div style="font-size:12px;color:#64748b;padding:8px 0">Tidak ada posisi terbuka.</div>';
+    return;
+  }
+  const p = positions[0];
+  tag.textContent = '#' + p.ticket;
+  tag.style.color = '#60a5fa';
+  const isBuy = p.type === 'BUY';
+  const pnl = p.profit || 0;
+  const pnlColor = pnl >= 0 ? '#6ee7b7' : '#fca5a5';
+  const pct = p.volume * 100;
+  body.innerHTML =
+    '<div class="tv-pos-row"><span class="k">Arah</span><span class="v" style="color:' + (isBuy ? '#6ee7b7' : '#fca5a5') + '">' + (isBuy ? 'BUY' : 'SELL') + ' ' + pct.toFixed(2).replace('.00','') + ' lot</span></div>' +
+    '<div class="tv-pos-row"><span class="k">Entry</span><span class="v">' + p.open_price + '</span></div>' +
+    '<div class="tv-pos-row"><span class="k">Stop Loss</span><span class="v">' + (p.sl || '-') + '</span></div>' +
+    '<div class="tv-pos-row"><span class="k">Take Profit</span><span class="v">' + (p.tp || '-') + '</span></div>' +
+    '<div class="tv-pos-row"><span class="k">Waktu</span><span class="v">' + (p.open_time || '-') + '</span></div>' +
+    '<div class="tv-pnl"><span class="pnl-lbl">Floating PnL</span><span class="pnl-val" style="color:' + pnlColor + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</span></div>';
+}
+
+function renderTVRisk(mon, st) {
+  const grid = document.getElementById('tvRiskGrid');
+  if (!grid) return;
+  const acc = mon.account || {};
+  const equity = acc.equity || 0;
+  const balance = acc.balance || 0;
+  const autoOn = !!st.auto_trade_enabled;
+  const webOn = !!st.enabled;
+  const cells = [
+    {k:'Autotrade', v: autoOn ? 'AKTIF' : 'MATI', c: autoOn ? '#6ee7b7' : '#fca5a5'},
+    {k:'Webhook', v: webOn ? 'Aktif' : 'Off', c: webOn ? '#6ee7b7' : '#fca5a5'},
+    {k:'Equity', v:'$' + Number(equity).toFixed(2), c:'#e2e8f0'},
+    {k:'Balance', v:'$' + Number(balance).toFixed(2), c:'#e2e8f0'},
+    {k:'Lot', v: st.lot_size || '0.01', c:'#e2e8f0'},
+    {k:'Signal Feed', v: webOn && autoOn ? 'READY' : 'BLOCKED', c: webOn && autoOn ? '#6ee7b7' : '#fbbf24'},
+  ];
+  grid.innerHTML = cells.map(c =>
+    '<div class="tv-risk-cell"><div class="k">' + c.k + '</div><div class="v" style="color:' + c.c + '">' + c.v + '</div></div>'
+  ).join('');
+}
+
+async function toggleTV() {
+  const d = await fetchJson('/api/tradingview/status', {enabled:false});
+  const target = !d.enabled;
+  try {
+    const r = await fetch('/api/tradingview/enable', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({enabled: target})
+    });
+    const res = await r.json();
+    showNotif('Webhook TradingView ' + (res.enabled ? 'AKTIF' : 'MATI'), res.enabled ? '#22c55e' : '#ef4444');
+    fetchTVMonitor();
+  } catch(e) {
+    showNotif('Gagal ubah status webhook', '#ef4444');
+  }
+}
+async function toggleAutoTrade() {
+  const st = await fetchJson('/api/tradingview/status', {enabled:false, auto_trade_enabled:false});
+  const target = !st.auto_trade_enabled;
+  try {
+    const r = await fetch(target ? '/api/auto-trade/do-enable' : '/api/auto-trade/do-disable');
+    const res = await r.json();
+    if (res && res.warning) {
+      showNotif('Autotrade AKTIF — ' + res.warning, '#fbbf24');
+    } else {
+      showNotif('Autotrade ' + (target ? 'AKTIF' : 'MATI'), target ? '#22c55e' : '#ef4444');
+    }
+    fetchTVMonitor();
+    if (typeof loadAutoTradeEnabled === 'function') loadAutoTradeEnabled();
+  } catch(e) {
+    showNotif('Gagal ubah autotrade', '#ef4444');
+  }
+}
+
+// Isi dropdown symbol dari akun aktif
+let tvSymbols = [];
+async function loadTVSymbols() {
+  try {
+    const st = await fetchJson('/api/account/status', {symbol:'XAUUSDc', symbols:['XAUUSDc'], connected:false});
+    document.getElementById('tvSymbolTitle').textContent = st.symbol || 'XAUUSDc';
+    tvSymbols = st.symbols || [st.symbol || 'XAUUSDc'];
+    const sel = document.getElementById('tvSymbolSel');
+    if (!sel) return;
+    sel.innerHTML = tvSymbols.map(s => '<option value="' + escapeHtml(s) + '"' + (s === (st.symbol||'XAUUSDc') ? ' selected' : '') + '>' + escapeHtml(s) + '</option>').join('');
+    initTVChart(st.symbol || 'XAUUSDc');
+  } catch(e) {}
+}
+async function changeTVSymbol() {
+  const sel = document.getElementById('tvSymbolSel');
+  const symbol = sel.value;
+  try {
+    const r = await fetch('/api/account/symbol', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({symbol})
+    });
+    const d = await r.json();
+    if (d.success) {
+      showNotif('Symbol aktif: ' + d.symbol, '#22c55e');
+      document.getElementById('tvSymbolTitle').textContent = d.symbol;
+      initTVChart(d.symbol);
+      fetchTVMonitor();
+    } else {
+      showNotif(d.error || 'Gagal ganti symbol', '#ef4444');
+      loadTVSymbols();
+    }
+  } catch(e) { showNotif('Error: ' + e.message, '#ef4444'); }
+}
+async function changeTVLot() {
+  const inp = document.getElementById('tvLotIn');
+  let lot = parseFloat(inp.value);
+  if (isNaN(lot) || lot < 0.01) lot = 0.01;
+  inp.value = lot.toFixed(2);
+  try {
+    const r = await fetch('/api/auto-trade/set-lot', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({lot_size: lot})
+    });
+    const d = await r.json();
+    if (d && d.lot_size) {
+      const saved = document.getElementById('tvLotSaved');
+      if (saved) saved.textContent = 'Lot tersimpan: ' + d.lot_size;
+      showNotif('Lot disimpan: ' + d.lot_size, '#22c55e');
+      fetchTVMonitor();
+    }
+  } catch(e) { showNotif('Gagal simpan lot', '#ef4444'); }
+}
+async function fetchTVSignals() {
+  const d = await fetchJson('/api/tradingview/signals', {signals:[]});
+  const tbody = document.getElementById('tvSignalsBody');
+  const sigs = d.signals || [];
+  if (!sigs.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="color:#64748b">Belum ada sinyal.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sigs.map(s => {
+    const status = String(s.status || '').toLowerCase();
+    const st = status === 'executed' ? '#6ee7b7' : status === 'rejected' ? '#fbbf24' : status === 'failed' ? '#fca5a5' : '#94a3b8';
+    const sig = String(s.signal || '').toLowerCase();
+    const badge = sig === 'buy' ? 'buy' : sig === 'sell' ? 'sell' : 'hold';
+    return '<tr>' +
+      '<td>' + escapeHtml(s.ts || '-') + '</td>' +
+      '<td>' + escapeHtml(s.symbol || '-') + '</td>' +
+      '<td><span class="badge ' + badge + '">' + escapeHtml(s.signal || '-') + '</span></td>' +
+      '<td style="color:' + st + '">' + escapeHtml(s.status || '-') + '</td>' +
+      '<td>' + escapeHtml(s.reason || '-') + '</td>' +
+      '<td>' + escapeHtml(s.volume || '-') + '</td>' +
+      '<td>' + escapeHtml(s.price || '-') + '</td>' +
+      '<td>' + escapeHtml(s.ticket || '-') + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+// TradingView tab auto-refresh every 10 detik
+setInterval(() => {
+  if (document.getElementById('tab-tradingview') && document.getElementById('tab-tradingview').style.display !== 'none') {
+    fetchTVMonitor();
+    fetchTVSignals();
+  }
+}, 10000);
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }

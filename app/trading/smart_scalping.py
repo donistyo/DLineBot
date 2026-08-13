@@ -143,6 +143,8 @@ class SmartScalpingEngine:
             "score": strength,
             "body_ratio": round(body_ratio, 2),
             "acceleration": round(accel, 2),
+            "accel_sign": "POS" if accel > 0 else ("NEG" if accel < 0 else "NEUT"),
+            "last_body": "BUY" if bodies and bodies[-1] > 0 else ("SELL" if bodies and bodies[-1] < 0 else "NEUT"),
             "bull_bodies": bull_count,
             "bear_bodies": bear_count
         }
@@ -208,6 +210,15 @@ class SmartScalpingEngine:
         current_close = closes[-1]
         current_open = opens[-1]
 
+        closed_highs = highs[-4:-1]
+        closed_lows = lows[-4:-1]
+        closed_high3 = max(closed_highs) if closed_highs else recent_high
+        closed_low3 = min(closed_lows) if closed_lows else recent_low
+        atr_ref = float(last.get("ATR", 0) or 0)
+        ext_gap = atr_ref * 0.5
+        extended_up = atr_ref > 0 and current_close > closed_high3 + ext_gap
+        extended_down = atr_ref > 0 and current_close < closed_low3 - ext_gap
+
         spread = float(last.get("spread", 0))
         volume = float(last.get("tick_volume", 0))
         avg_volume = np.mean([float(candles.iloc[i].get("tick_volume", 0)) for i in range(len(candles))]) or 1
@@ -259,7 +270,10 @@ class SmartScalpingEngine:
             "liquidity_grab": liquidity_grab,
             "vol_ratio": round(vol_ratio, 2),
             "upper_wick": round(upper_wick, 2),
-            "lower_wick": round(lower_wick, 2)
+            "lower_wick": round(lower_wick, 2),
+            "body": round(body, 2),
+            "extended_up": extended_up,
+            "extended_down": extended_down
         }
 
     # =====================================

@@ -3,10 +3,11 @@ from app.mt5.position_manager import PositionManager
 
 class PositionFilter:
 
-    def __init__(self, max_positions=5):
+    def __init__(self, max_positions=5, max_same_direction=3):
 
         self.position_manager = PositionManager()
         self.max_positions = max_positions
+        self.max_same_direction = max_same_direction
 
     def allow(self, symbol="XAUUSD", direction=None):
 
@@ -34,6 +35,20 @@ class PositionFilter:
                 "reason": f"Max posisi ({self.max_positions}) tercapai.",
                 "position_count": count
             }
+
+        if direction in ("BUY", "SELL"):
+            same = sum(
+                1 for p in positions
+                if (direction == "BUY" and p.type == 0) or
+                   (direction == "SELL" and p.type == 1)
+            )
+            if same >= self.max_same_direction:
+                return {
+                    "allowed": False,
+                    "reason": f"Max {self.max_same_direction} posisi {direction} searah tercapai.",
+                    "position_count": count,
+                    "same_direction": same
+                }
 
         return {
             "allowed": True,
