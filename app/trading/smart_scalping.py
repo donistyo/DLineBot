@@ -70,6 +70,37 @@ class SmartScalpingEngine:
         score = self._scalping_score(result)
         result["scalp_score"] = score
 
+        # =====================================
+        # Referensi harga/trend untuk guard
+        # anti-exhaustion (pakai di decision engine)
+        # =====================================
+        try:
+            result["close"] = float(last.get("close", 0) or 0)
+            result["ema50"] = float(last.get("EMA50", 0) or 0)
+            result["atr"] = float(last.get("ATR", 0) or 0)
+        except Exception:
+            pass
+
+        # =====================================
+        # Range 20 candle terakhir (untuk guard
+        # rebound di decision engine)
+        # =====================================
+        try:
+            recent20 = df.tail(20)
+            result["range_high"] = float(recent20["high"].max())
+            result["range_low"] = float(recent20["low"].min())
+        except Exception:
+            pass
+
+        # =====================================
+        # M1 momentum (wajib konfirmasi searah
+        # dengan sinyal di decision engine)
+        # =====================================
+        try:
+            result["m1_momentum"] = self._momentum_m1()
+        except Exception:
+            pass
+
         return result
 
     # =====================================
@@ -99,6 +130,20 @@ class SmartScalpingEngine:
             htf["open"] = htf["open"].astype(float)
             htf["close"] = htf["close"].astype(float)
             return self._momentum(htf)
+        except Exception:
+            return None
+
+    def _momentum_m1(self, bars=10):
+        try:
+            import MetaTrader5 as mt5
+            rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M1, 0, bars)
+            if rates is None or len(rates) < 3:
+                return None
+            import pandas as _pd
+            m1 = _pd.DataFrame(rates)
+            m1["open"] = m1["open"].astype(float)
+            m1["close"] = m1["close"].astype(float)
+            return self._momentum(m1)
         except Exception:
             return None
 

@@ -1,4 +1,5 @@
 import json
+import time
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -1136,6 +1137,8 @@ class LiveEngine:
 
                 and not reentry_reason
 
+                and not same_dir_reason
+
                 and _atr_filter_ok
 
             )
@@ -1146,6 +1149,24 @@ class LiveEngine:
                 session_result = self.session_manager.allow(open_tickets)
                 if not session_result["allowed"]:
                     can_trade = False
+            else:
+                session_result = None
+
+            self._write_entry_checklist(
+                can_trade=can_trade,
+                decision=decision,
+                filter_result=filter_result,
+                daily_result=daily_result,
+                position_result=position_result,
+                tf_confirmation=tf_confirmation,
+                reentry_reason=reentry_reason,
+                same_dir_reason=same_dir_reason,
+                atr_filter_ok=_atr_filter_ok,
+                atr_filter_reason=_atr_filter_reason,
+                session_result=session_result,
+                scalp_result=scalp_result,
+                regime=regime,
+            )
 
             if can_trade:
 
@@ -1322,6 +1343,16 @@ class LiveEngine:
                     "status": "BLOCKED",
 
                     "reason": reentry_reason
+
+                }
+
+            elif same_dir_reason:
+
+                result = {
+
+                    "status": "BLOCKED",
+
+                    "reason": same_dir_reason
 
                 }
 
@@ -1762,6 +1793,104 @@ class LiveEngine:
 
     def _current_min_score(self):
         return 67 + self._score_penalty
+
+    # =====================================
+    # Entry Checklist (live menuju dashboard)
+    # =====================================
+
+    def _write_entry_checklist(self, can_trade, decision, filter_result, daily_result,
+                               position_result, tf_confirmation, reentry_reason,
+                               same_dir_reason, atr_filter_ok, atr_filter_reason,
+                               session_result, scalp_result, regime):
+        try:
+            score_data = (scalp_result or {}).get("scalp_score", {}) or {}
+            score = score_data.get("score", 0)
+            direction = score_data.get("direction", "NEUTRAL")
+            action = decision.get("action", "NO_TRADE")
+            min_score = self._current_min_score()
+            penalty = self._score_penalty
+
+            items = []
+            items.append(self._ck("Autotrade ON", self._auto_trade_enabled, None))
+
+            equity_floor_ok = True
+            try:
+                _account = self.account_manager.get_info()
+                _equity = float(_account.get("equity", 0))
+                with open("runtime/trade_config.json") as _f:
+                    floor = float(json.load(_f).get("equity_floor", 100.0))
+                equity_floor_ok = _equity > floor
+            except Exception:
+                floor = 100.0
+            items.append(self._ck("Equity > floor", equity_floor_ok, f"Equity vs floor {floor:.0f}"))
+
+            sig_enough = score >= min_score
+            items.append(self._ck(
+                f"Scalp score >= {min_score}",
+                sig_enough,
+                f"{score:.1f}/100 {score_data.get('grade', '-')}" + (f" (penalti loss x{penalty})" if penalty else "")
+            ))
+
+            items.append(self._ck("Arah sinyal jelas", action in ("BUY", "SELL"), f"Direction {direction}"))
+
+            action_ok = action in ("BUY", "SELL")
+            items.append(self._ck("Keputusan siap trade", action_ok, decision.get("reason", "")))
+
+            not_manual = not decision.get("manual", False)
+            items.append(self._ck("Bukan sinyal manual", not_manual, None))
+
+            items.append(self._ck(
+                "Regime trend searah",
+                action_ok and direction == str(regime.get("trend", "")).upper(),
+                f"Trend {regime.get('trend', 'SIDEWAYS')} vs {direction}"
+            ))
+
+            items.append(self._ck("Trade filter (session/spread/vol)", filter_result.get("allowed", False), filter_result.get("reason", "")))
+            items.append(self._ck("Daily risk OK", daily_result.get("allowed", False), daily_result.get("reason", "")))
+            items.append(self._ck("Posisi aman (max/arah/loss)", position_result.get("allowed", False), position_result.get("reason", "")))
+
+            tf_allowed = bool(tf_confirmation.get("allowed", False)) if tf_confirmation else True
+            items.append(self._ck("M5 & M15 searah sinyal", tf_allowed, (tf_confirmation or {}).get("reason", "")))
+
+            items.append(self._ck("Cooldown re-entry 15 menit", not reentry_reason, reentry_reason or None))
+            items.append(self._ck("Spacing entry searah 60s", not same_dir_reason, same_dir_reason or None))
+            items.append(self._ck("ATR volatility filter OK", atr_filter_ok, atr_filter_reason or None))
+
+            session_ok = True
+            session_reason = None
+            if session_result is not None:
+                session_ok = session_result.get("allowed", True)
+                session_reason = session_result.get("reason") or (None if session_ok else "Session tidak diizinkan")
+            items.append(self._ck("Session aktif diizinkan", session_ok, session_reason))
+
+            blocked_reason = None
+            if not can_trade:
+                for it in items:
+                    if not it["ok"]:
+                        blocked_reason = it["label"] + ": " + (it["detail"] or "")
+                        break
+                if blocked_reason is None:
+                    blocked_reason = decision.get("reason", "Diblok oleh engine lain")
+
+            payload = {
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "can_trade": can_trade,
+                "decision_action": action,
+                "decision_reason": decision.get("reason", ""),
+                "blocked_reason": blocked_reason,
+                "min_score": min_score,
+                "score": score,
+                "direction": direction,
+                "items": items
+            }
+            with open("runtime/entry_checklist.json", "w") as _f:
+                json.dump(payload, _f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _ck(label, ok, detail):
+        return {"label": label, "ok": bool(ok), "detail": detail}
 
     # =====================================
     # Stop Engine

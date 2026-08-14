@@ -112,6 +112,92 @@ class DecisionEngine:
                 "grade": grade
             }
 
+        # =====================================
+        # Exhaustion guard: kalau harga sudah
+        # jauh/extended dari EMA50 di arah yang
+        # sama dengan sinyal -> jangan kejar.
+        # Mencegah entry tepat di dasar/puncak.
+        # =====================================
+        try:
+            _ema_ref = float(scalp_result.get("close", 0) or 0)
+            ema50 = None
+            if scalp_result and scalp_result.get("ema50"):
+                ema50 = float(scalp_result["ema50"])
+            else:
+                ema50 = None
+            if ema50 and ema50 > 0 and _ema_ref > 0:
+                _last_atr = 0
+                try:
+                    if scalp_result and scalp_result.get("atr"):
+                        _last_atr = float(scalp_result["atr"])
+                    elif scalp_result and scalp_result.get("liquidity"):
+                        _last_atr = float(scalp_result["liquidity"].get("atr", 0) or 0)
+                except Exception:
+                    _last_atr = 0
+                if _last_atr <= 0:
+                    _last_atr = 2.5
+                dist_atr = abs(_ema_ref - ema50) / max(_last_atr, 0.01)
+                if direction == "BUY" and dist_atr >= 1.2:
+                    return {
+                        "action": "NO_TRADE",
+                        "reason": f"Buy extended {dist_atr:.1f}xATR dari EMA50 - rawan kejar puncak",
+                        "confidence": score / 100, "score": score, "grade": grade
+                    }
+                if direction == "SELL" and dist_atr >= 1.2:
+                    return {
+                        "action": "NO_TRADE",
+                        "reason": f"Sell extended {dist_atr:.1f}xATR dari EMA50 - rawan kejar lembah",
+                        "confidence": score / 100, "score": score, "grade": grade
+                    }
+        except Exception:
+            pass
+
+        # =====================================
+        # Rebound guard: tolak entry dekat tepi
+        # range 20 candle M5 (SELL di dekat low =
+        # jual di dasar jelang rebound, BUY di
+        # dekat high = beli di puncak jelang koreksi)
+        # =====================================
+        try:
+            _r_close = float(scalp_result.get("close", 0) or 0)
+            _r_high = float(scalp_result.get("range_high", 0) or 0)
+            _r_low = float(scalp_result.get("range_low", 0) or 0)
+            _r_atr = float(scalp_result.get("atr", 0) or 0)
+            if _r_close > 0 and _r_low > 0 and _r_atr > 0:
+                if direction == "SELL" and _r_close <= _r_low + _r_atr:
+                    return {
+                        "action": "NO_TRADE",
+                        "reason": f"Sell di dekat low range ({_r_close:.2f} <= low {_r_low:.2f} + {_r_atr:.2f} ATR) - rawan rebound naik",
+                        "confidence": score / 100, "score": score, "grade": grade
+                    }
+            if _r_close > 0 and _r_high > 0 and _r_atr > 0:
+                if direction == "BUY" and _r_close >= _r_high - _r_atr:
+                    return {
+                        "action": "NO_TRADE",
+                        "reason": f"Buy di dekat high range ({_r_close:.2f} >= high {_r_high:.2f} - {_r_atr:.2f} ATR) - rawan koreksi turun",
+                        "confidence": score / 100, "score": score, "grade": grade
+                    }
+        except Exception:
+            pass
+
+        # =====================================
+        # M1 momentum wajib searah sinyal:
+        # jika candle M1 terakhir masih melawan
+        # arah, jangan entry (hindari melawan
+        # gerakan intraday yang baru terbentuk)
+        # =====================================
+        try:
+            m1 = (scalp_result or {}).get("m1_momentum") or {}
+            m1_dir = m1.get("direction")
+            if m1_dir in ("BUY", "SELL") and m1_dir != direction:
+                return {
+                    "action": "NO_TRADE",
+                    "reason": f"M1 momentum {m1_dir} melawan sinyal {direction} - tunggu konfirmasi searah",
+                    "confidence": score / 100, "score": score, "grade": grade
+                }
+        except Exception:
+            pass
+
         if prediction:
             ai_signal = prediction.get("signal", "WAIT")
             ai_conf = prediction.get("confidence", 0)

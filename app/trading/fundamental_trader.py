@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import MetaTrader5 as mt5
 from app.strategy.daily_trend_engine import DailyTrendEngine
 from app.mt5.session import MT5Session
 from app.mt5.parted_order import PartedOrder, PartedOrderError

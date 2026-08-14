@@ -183,7 +183,47 @@ def tv_enable(data: dict = None):
 
 @router.get("/signals")
 def tv_signals(limit: int = 30):
-    return {"signals": get_signals(limit)}
+    """Gabungan: sinyal webhook TradingView + semua trade (open/close) dari MT5."""
+    tv = _load_signals()
+    all_signals = list(reversed(tv[-limit:]))
+
+    mt5_rows = _mt5_trade_rows()
+    combined = all_signals + mt5_rows
+
+    combined.sort(key=lambda x: x.get("ts", ""), reverse=True)
+
+    return {"signals": combined[:limit], "source": "tv+mt5"}
+
+
+def _mt5_trade_rows(limit: int = 40) -> list:
+    """Ambil riwayat trade dari MT5 (deal entry IN/OUT) jadi baris log seragam."""
+    rows = []
+    try:
+        import MetaTrader5 as mt5
+        from app.mt5.session import MT5Session
+        from datetime import datetime, timedelta
+
+        MT5Session.ensure_connection()
+        utc_from = datetime.now() - timedelta(days=3)
+        deals = mt5.history_deals_get(utc_from, datetime.now()) or []
+
+        seen = {}
+        for d in deals:
+            rows.append({
+                "ts": datetime.fromtimestamp(d.time).strftime("%Y-%m-%d %H:%M:%S"),
+                "symbol": d.symbol,
+                "signal": "BUY" if d.type == 0 else "SELL",
+                "status": "CLOSED" if d.entry == 1 else "OPENED",
+                "reason": (d.comment or "").replace(" CLOSE", "").strip() or ("Close" if d.entry == 1 else "Open"),
+                "volume": d.volume,
+                "price": round(d.price, 2),
+                "ticket": d.position_id,
+                "profit": round(d.profit, 2) if d.profit != 0 else None,
+            })
+    except Exception:
+        pass
+    rows.sort(key=lambda x: x.get("ts", ""), reverse=True)
+    return rows[:limit]
 
 
 @router.get("/multi-tf")

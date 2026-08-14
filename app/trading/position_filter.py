@@ -50,6 +50,26 @@ class PositionFilter:
                     "same_direction": same
                 }
 
+        # =====================================
+        # Anti averaging-down: jangan buka posisi
+        # searah baru jika posisi searah yang
+        # masih ada sedang floating loss.
+        # =====================================
+        if direction in ("BUY", "SELL"):
+            loss_same = sum(
+                1 for p in positions
+                if (((direction == "BUY" and p.type == 0) or
+                     (direction == "SELL" and p.type == 1)) and
+                    (p.profit < 0))
+            )
+            if loss_same > 0:
+                return {
+                    "allowed": False,
+                    "reason": f"Posisi {direction} searah masih floating loss ({loss_same}) - tunggu pulih atau SL.",
+                    "position_count": count,
+                    "loss_same_direction": loss_same
+                }
+
         return {
             "allowed": True,
             "reason": f"Posisi {count}/{self.max_positions}.",

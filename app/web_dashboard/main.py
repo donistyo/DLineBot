@@ -779,6 +779,22 @@ def api_scalping():
 # Auto-Trade Monitor API
 # =====================================
 
+@app.get("/api/auto-trade/checklist")
+def api_auto_trade_checklist():
+    """Entry checklist live dari live_engine (runtime/entry_checklist.json)."""
+    try:
+        with open("runtime/entry_checklist.json") as _f:
+            return json.load(_f)
+    except Exception:
+        return {
+            "timestamp": "-",
+            "can_trade": False,
+            "decision_action": "NO_TRADE",
+            "decision_reason": "Checklist belum tersedia (engine belum menulis).",
+            "blocked_reason": "Menunggu data engine...",
+            "items": []
+        }
+
 @app.get("/api/auto-trade/monitor")
 def api_auto_trade_monitor():
     account = get_cached_account()
@@ -1802,6 +1818,16 @@ tr:hover td { background:rgba(59,130,246,0.05); }
       <div class="tv-risk-grid" id="tvRiskGrid"></div>
     </div>
 
+    <div class="tv-signal" style="margin-top:10px">
+      <div class="tv-signal-head">
+        <span class="lbl">Checklist Syarat Entry</span>
+        <span class="lbl" id="tvCkSummary" style="color:#64748b">-</span>
+      </div>
+      <div id="tvCkBody">
+        <div style="font-size:12px;color:#64748b;padding:8px 0">Memuat checklist...</div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -1817,10 +1843,10 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 </div>
 </div>
 
-<h2>Log Sinyal TradingView</h2>
+<h2>Log Semua Trading</h2>
 <div class="table-wrap"><table><thead><tr>
-  <th>Waktu</th><th>Symbol</th><th>Signal</th><th>Status</th><th>Alasan</th><th>Lot</th><th>Harga</th><th>Ticket</th>
-</tr></thead><tbody id="tvSignalsBody"><tr><td colspan="8" style="color:#64748b">Belum ada sinyal.</td></tr></tbody></table></div>
+  <th>Waktu</th><th>Symbol</th><th>Signal</th><th>Status</th><th>Alasan</th><th>Lot</th><th>Harga</th><th>Profit</th><th>Ticket</th>
+</tr></thead><tbody id="tvSignalsBody"><tr><td colspan="9" style="color:#64748b">Belum ada data trade.</td></tr></tbody></table></div>
 
 </div>
 
@@ -3076,11 +3102,12 @@ function tvMapSymbol(symbol) {
 }
 
 async function fetchTVMonitor() {
-  const [st, scalp, mtf, mon] = await Promise.all([
+  const [st, scalp, mtf, mon, ck] = await Promise.all([
     fetchJson('/api/tradingview/status', {enabled:false, secret_set:false, auto_trade_enabled:false, lot_size:0.01}),
     fetchJson('/api/scalping', {scalp_score:{score:0,grade:'-',direction:'NEUTRAL',action:'WAIT'}}),
     fetchJson('/api/tradingview/multi-tf', {symbol:'XAUUSDc', tfs:{}}),
     fetchJson('/api/auto-trade/monitor', {account:{balance:0,equity:0}, positions:[], auto_trade_enabled:false, lot_size:0.01}),
+    fetchJson('/api/auto-trade/checklist', {can_trade:false, items:[], decision_action:'NO_TRADE', decision_reason:'', blocked_reason:''}),
   ]);
 
   // Pills status
@@ -3125,6 +3152,52 @@ async function fetchTVMonitor() {
   renderTVSignal(scalp.scalp_score || {}, mtf.tfs || {});
   renderTVPosition(mon.positions || []);
   renderTVRisk(mon, st);
+  renderTvChecklist(ck);
+}
+
+function renderTvChecklist(ck) {
+  const body = document.getElementById('tvCkBody');
+  const summ = document.getElementById('tvCkSummary');
+  if (!body) return;
+  const items = ck.items || [];
+  if (!items.length) {
+    summ.textContent = 'MENUNGGU';
+    summ.style.color = '#fbbf24';
+    body.innerHTML = '<div style="font-size:12px;color:#64748b;padding:8px 0">' + escapeHtml(ck.blocked_reason || 'Belum ada data checklist dari engine.') + '</div>';
+    return;
+  }
+  const okCount = items.filter(i => i.ok).length;
+  const total = items.length;
+  const allOk = !!ck.can_trade;
+  summ.textContent = allOk ? okCount + '/' + total + ' OK' : okCount + '/' + total + ' PASS';
+  summ.style.color = allOk ? '#6ee7b7' : '#fbbf24';
+
+  const rows = items.map(i => {
+    const ok = !!i.ok;
+    const dot = ok ? '<span style="color:#22c55e;font-size:9px">&#9679;</span>' :
+                    '<span style="color:#ef4444;font-size:9px">&#9679;</span>';
+    const lbl = i.label;
+    const det = i.detail ? '<span style="color:#64748b;font-size:10px">' + escapeHtml(String(i.detail)) + '</span>' : '';
+    const norm = ok ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)';
+    const txt = ok ? '#6ee7b7' : '#fca5a5';
+    return '<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;margin:3px 0;border-radius:6px;background:' + norm + '">' +
+      '<span style="width:8px;text-align:center">' + dot + '</span>' +
+      '<span style="flex:1;font-size:11px;color:' + txt + '">' + escapeHtml(lbl) + '</span>' +
+      det +
+    '</div>';
+  }).join('');
+
+  let verdict = '';
+  if (ck.decision_reason) {
+    verdict = '<div style="margin-top:8px;padding:7px 9px;border-radius:6px;font-size:11px;background:rgba(99,102,241,0.12);color:#a5b4fc">' +
+      '<b style="color:#e2e8f0">Keputusan:</b> ' + escapeHtml(ck.decision_action) + ' &mdash; ' + escapeHtml(ck.decision_reason) + '</div>';
+  }
+  if (!allOk && ck.blocked_reason) {
+    verdict += '<div style="margin-top:6px;padding:7px 9px;border-radius:6px;font-size:11px;background:rgba(239,68,68,0.15);color:#fca5a5">' +
+      '<b>BLOCKED:</b> ' + escapeHtml(ck.blocked_reason) + '</div>';
+  }
+
+  body.innerHTML = rows + verdict;
 }
 
 function renderTVSignal(ss, tfs) {
@@ -3314,14 +3387,17 @@ async function fetchTVSignals() {
   const tbody = document.getElementById('tvSignalsBody');
   const sigs = d.signals || [];
   if (!sigs.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="color:#64748b">Belum ada sinyal.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="color:#64748b">Belum ada data trade.</td></tr>';
     return;
   }
   tbody.innerHTML = sigs.map(s => {
     const status = String(s.status || '').toLowerCase();
-    const st = status === 'executed' ? '#6ee7b7' : status === 'rejected' ? '#fbbf24' : status === 'failed' ? '#fca5a5' : '#94a3b8';
+    const st = status === 'executed' || status === 'closed' ? '#6ee7b7' : status === 'rejected' ? '#fbbf24' : status === 'failed' || status === 'opened' ? '#fca5a5' : '#94a3b8';
     const sig = String(s.signal || '').toLowerCase();
     const badge = sig === 'buy' ? 'buy' : sig === 'sell' ? 'sell' : 'hold';
+    let prof = '-';
+    if (typeof s.profit === 'number') prof = (s.profit >= 0 ? '+' : '') + s.profit.toFixed(2);
+    const profClr = typeof s.profit === 'number' ? (s.profit >= 0 ? '#6ee7b7' : '#fca5a5') : '#94a3b8';
     return '<tr>' +
       '<td>' + escapeHtml(s.ts || '-') + '</td>' +
       '<td>' + escapeHtml(s.symbol || '-') + '</td>' +
@@ -3330,6 +3406,7 @@ async function fetchTVSignals() {
       '<td>' + escapeHtml(s.reason || '-') + '</td>' +
       '<td>' + escapeHtml(s.volume || '-') + '</td>' +
       '<td>' + escapeHtml(s.price || '-') + '</td>' +
+      '<td style="color:' + profClr + '">' + prof + '</td>' +
       '<td>' + escapeHtml(s.ticket || '-') + '</td>' +
     '</tr>';
   }).join('');
