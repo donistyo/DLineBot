@@ -24,6 +24,7 @@ from app.config.features import FEATURE_COLUMNS
 from app.config.settings import DASHBOARD_URL
 from app.config.settings import TRADE_LOT_SIZE, BROKER
 from app.config.settings import get_symbol_params, is_crypto_symbol, get_model_prefix
+from app.config.settings import get_trade_config
 
 from app.logger.trade_logger import TradeLogger
 
@@ -476,6 +477,7 @@ class LiveEngine:
 
         self._last_closed_direction = None
         self._last_closed_time = None
+        self._last_closed_was_win = True
         self._last_same_dir_entry = {}
         self._same_dir_spacing = 60.0
         try:
@@ -563,10 +565,10 @@ class LiveEngine:
     # Decision
     # =====================================
 
-    def decide(self, prediction, scalp_result=None, regime=None):
+    def decide(self, prediction, scalp_result=None, regime=None, higher_trend=None):
 
         return self.decision_engine.decide(
-            prediction, scalp_result, regime
+            prediction, scalp_result, regime, higher_trend
         )
 
     # =====================================
@@ -802,20 +804,15 @@ class LiveEngine:
                 self.telegram.send(signal_text)
 
                 # -------------------------------------------------
-                # 15-Minute Fundamental Trade Execution
+                # 15-Minute Fundamental Trade Execution  [DISABLED]
+                # Jalur Fundamental dinonaktifkan karena sering entry
+                # di timing buruk dan bypass checklist scalp engine.
                 # -------------------------------------------------
-                ft_result = self.fundamental_trader.execute(regime=regime, prediction=prediction)
-                if ft_result and ft_result["status"] not in ("SKIPPED", "ERROR"):
-                    print()
-                    print("=" * 60)
-                    print("FUNDAMENTAL TRADE EXECUTED")
-                    print("=" * 60)
-                    print(f"Signal : {ft_result['signal']}")
-                    print(f"Lot    : {ft_result['volume']}")
-                    print(f"Entry  : {ft_result['entry_price']}")
-                    print(f"SL     : {ft_result['stop_loss']}")
-                    print(f"TP1    : {ft_result['take_profit1']}")
-                    print(f"TP2    : {ft_result['take_profit2']}")
+                print()
+                print("=" * 60)
+                print("FUNDAMENTAL TRADER")
+                print("=" * 60)
+                print("Jalur Fundamental DISABLED - hanya scalp engine yang aktif")
 
             # ===============================
             # AI Confidence
@@ -852,10 +849,23 @@ class LiveEngine:
 
             self.decision_engine.min_scalp_score = self._current_min_score()
 
+            higher_trend = None
+            try:
+                tf_details = (tf_confirmation or {}).get("details", {}) or {}
+                _dirs = []
+                for _tf, _info in tf_details.items():
+                    if isinstance(_info, dict) and _info.get("ema_trend") in ("UP", "DOWN"):
+                        _dirs.append(self.decision_engine.trend_map.get(_info["ema_trend"]))
+                if _dirs and all(d == _dirs[0] for d in _dirs):
+                    higher_trend = _dirs[0]
+            except Exception:
+                higher_trend = None
+
             decision = self.decide(
                 prediction,
                 scalp_result,
-                regime
+                regime,
+                higher_trend,
             )
 
             DecisionView.show(
@@ -978,6 +988,7 @@ class LiveEngine:
             if closed_tickets:
                 self._last_closed_direction = self._ticket_direction(closed_tickets)
                 self._last_closed_time = datetime.now()
+                self._last_closed_was_win = self._ticket_profit(closed_tickets) >= 0
                 self._track_consecutive_losses(closed_tickets)
             self._seen_tickets = active_tickets
 
@@ -1103,7 +1114,11 @@ class LiveEngine:
             except:
                 pass
 
-            reentry_reason = self._reentry_blocked(decision["action"], cooldown_minutes=15)
+            reentry_reason = self._reentry_blocked(
+                decision["action"],
+                cooldown_minutes=15,
+                cooldown_win_minutes=float(get_trade_config("reentry_cooldown_win_min", 15.0)),
+            )
             same_dir_reason = self._same_dir_spacing_blocked(decision["action"])
 
             if not reentry_reason and same_dir_reason:
@@ -1740,14 +1755,29 @@ class LiveEngine:
             pass
         return None
 
-    def _reentry_blocked(self, decision_action, cooldown_minutes=15):
+    def _ticket_profit(self, tickets):
+        try:
+            total = 0.0
+            for ticket in sorted(tickets):
+                deals = mt5.history_deals_get(position=ticket) if hasattr(mt5, "history_deals_get") else None
+                if not deals:
+                    continue
+                for d in deals:
+                    if d.entry == mt5.DEAL_ENTRY_OUT:
+                        total += d.profit
+            return total
+        except Exception:
+            return 0.0
+
+    def _reentry_blocked(self, decision_action, cooldown_minutes=15, cooldown_win_minutes=5):
         if not self._last_closed_direction or not self._last_closed_time:
             return None
         if decision_action != self._last_closed_direction:
             return None
-        if (datetime.now() - self._last_closed_time).total_seconds() / 60 > cooldown_minutes:
+        minutes = cooldown_minutes if not self._last_closed_was_win else cooldown_win_minutes
+        if (datetime.now() - self._last_closed_time).total_seconds() / 60 > minutes:
             return None
-        return f"Hindari re-entry arah sama: posisi {self._last_closed_direction} baru saja ditutup."
+        return f"Hindari re-entry arah sama: posisi {self._last_closed_direction} baru ditutup (tunggu {minutes:.0f}m, mode {'win' if self._last_closed_was_win else 'loss'})."
 
     def _same_dir_spacing_blocked(self, decision_action):
         if decision_action not in ("BUY", "SELL"):
@@ -1841,7 +1871,7 @@ class LiveEngine:
 
             items.append(self._ck(
                 "Regime trend searah",
-                action_ok and direction == str(regime.get("trend", "")).upper(),
+                action_ok and direction == self.decision_engine.trend_map.get(str(regime.get("trend", "SIDEWAYS")).upper()),
                 f"Trend {regime.get('trend', 'SIDEWAYS')} vs {direction}"
             ))
 

@@ -124,6 +124,16 @@ class FundamentalTrader:
             if ai_signal in ("BUY", "SELL") and ai_conf >= 60 and direction != ai_signal:
                 return False, f"Fundamental {direction} vs AI {ai_signal} ({ai_conf:.0f}%) (lawan arah)"
 
+        # =====================================
+        # Guard konsisten dgn engine scalp:
+        # - M1 momentum wajib searah
+        # - tidak entry extended dari EMA50
+        # - tidak entry di dekat tepi range (rebound)
+        # =====================================
+        g_ok, g_reason = self._entry_guards(direction)
+        if not g_ok:
+            return False, g_reason
+
         tf_ok, tf_reason = self._higher_tf_aligned(direction)
         if not tf_ok:
             return False, tf_reason
@@ -137,6 +147,45 @@ class FundamentalTrader:
             return False, f"Cooldown {mins}m remaining"
 
         return True, f"Fundamental {bias} -> {direction}"
+
+    def _entry_guards(self, direction):
+        """Terapkan 3 guard yang sama dengan engine scalp (pakai data scalping.json
+        terakhir yang ditulis live_engine tiap siklus)."""
+        try:
+            import json
+            with open("runtime/scalping.json") as f:
+                sc = json.load(f)
+
+            close = float(sc.get("close", 0) or 0)
+            ema50 = float(sc.get("ema50", 0) or 0)
+            atr = float(sc.get("atr", 0) or 0)
+            range_low = float(sc.get("range_low", 0) or 0)
+            range_high = float(sc.get("range_high", 0) or 0)
+            m1 = sc.get("m1_momentum") or {}
+            m1_dir = m1.get("direction")
+
+            # 1) M1 momentum wajib searah
+            if m1_dir in ("BUY", "SELL") and m1_dir != direction:
+                return False, f"Guard: M1 momentum {m1_dir} melawan {direction} - tunggu searah"
+
+            # 2) Extended dari EMA50 (>= 1.2xATR) -> jangan kejar
+            if ema50 > 0 and atr > 0 and close > 0:
+                dist_atr = abs(close - ema50) / atr
+                if direction == "BUY" and dist_atr >= 1.2:
+                    return False, f"Guard: Buy extended {dist_atr:.1f}xATR dari EMA50 - kejar puncak"
+                if direction == "SELL" and dist_atr >= 1.2:
+                    return False, f"Guard: Sell extended {dist_atr:.1f}xATR dari EMA50 - kejar lembah"
+
+            # 3) Rebound guard: jangan entry dekat tepi range 20 candle
+            if close > 0 and range_low > 0 and range_high > 0 and atr > 0:
+                if direction == "SELL" and close <= range_low + atr:
+                    return False, f"Guard: Sell dekat low range ({close:.2f}) - rawan rebound naik"
+                if direction == "BUY" and close >= range_high - atr:
+                    return False, f"Guard: Buy dekat high range ({close:.2f}) - rawan koreksi turun"
+
+            return True, "Guard entry OK"
+        except Exception:
+            return True, "Guard entry: data tidak tersedia, dilewati"
 
     def execute(self, regime=None, prediction=None):
         MT5Session.ensure_connection()

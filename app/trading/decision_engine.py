@@ -5,7 +5,7 @@ class DecisionEngine:
         self.sideways_penalty = 15
         self.trend_map = {"UP": "BUY", "DOWN": "SELL", "SIDEWAYS": None}
 
-    def decide(self, prediction=None, scalp_result=None, regime=None) -> dict:
+    def decide(self, prediction=None, scalp_result=None, regime=None, higher_trend=None) -> dict:
         if scalp_result is None or regime is None:
             return {"action": "NO_TRADE", "reason": "Data tidak tersedia", "confidence": 0}
 
@@ -13,6 +13,21 @@ class DecisionEngine:
         score = score_data.get("score", 0)
         direction = score_data.get("direction", "NEUTRAL")
         grade = score_data.get("grade", "D")
+
+        # =====================================
+        # Satu sumber kebenaran kekuatan trend.
+        # Dipakai bersama oleh Liquidity guard,
+        # EMA50 guard, dan Rebound guard di
+        # bawah (bukan re-implementasi terpisah).
+        # Definisi: mode TREND + ADX M5 >= 30 +
+        # trend searah sinyal.
+        # =====================================
+        trend = regime.get("trend", "SIDEWAYS") if regime else "SIDEWAYS"
+        mode = regime.get("mode", "RANGING") if regime else "RANGING"
+        adx = regime.get("adx", 0) if regime else 0
+        expected_dir = self.trend_map.get(trend)
+        strong_trend = (mode == "TREND" and adx >= 30
+                        and expected_dir == direction)
 
         if score < self.min_scalp_score:
             return {
@@ -93,9 +108,11 @@ class DecisionEngine:
 
         # =====================================
         # Extension guard: harga sudah jauh/extended dari range terbaru
-        # -> jangan entry mengejar gerakan yang sudah terlalu jauh
+        # -> jangan entry mengejar gerakan yang sudah terlalu jauh.
+        # ADAPTIF: hanya aktif saat trend LEMAH (strong_trend False).
+        # Saat trend kuat, breakout dari range adalah continuation valid.
         # =====================================
-        if direction == "BUY" and liquidity.get("extended_up"):
+        if direction == "BUY" and liquidity.get("extended_up") and not strong_trend:
             return {
                 "action": "NO_TRADE",
                 "reason": "Harga extended di atas range M5 terbaru - jangan kejar puncak",
@@ -103,7 +120,7 @@ class DecisionEngine:
                 "score": score,
                 "grade": grade
             }
-        if direction == "SELL" and liquidity.get("extended_down"):
+        if direction == "SELL" and liquidity.get("extended_down") and not strong_trend:
             return {
                 "action": "NO_TRADE",
                 "reason": "Harga extended di bawah range M5 terbaru - jangan kejar lembah",
@@ -117,6 +134,10 @@ class DecisionEngine:
         # jauh/extended dari EMA50 di arah yang
         # sama dengan sinyal -> jangan kejar.
         # Mencegah entry tepat di dasar/puncak.
+        # ADAPTIF: hanya aktif saat trend LEMAH.
+        # Saat trend kuat harga wajar extended ->
+        # izinkan (continuation, bukan kejar).
+        # Memakai flag strong_trend tunggal di atas.
         # =====================================
         try:
             _ema_ref = float(scalp_result.get("close", 0) or 0)
@@ -137,18 +158,19 @@ class DecisionEngine:
                 if _last_atr <= 0:
                     _last_atr = 2.5
                 dist_atr = abs(_ema_ref - ema50) / max(_last_atr, 0.01)
-                if direction == "BUY" and dist_atr >= 1.2:
-                    return {
-                        "action": "NO_TRADE",
-                        "reason": f"Buy extended {dist_atr:.1f}xATR dari EMA50 - rawan kejar puncak",
-                        "confidence": score / 100, "score": score, "grade": grade
-                    }
-                if direction == "SELL" and dist_atr >= 1.2:
-                    return {
-                        "action": "NO_TRADE",
-                        "reason": f"Sell extended {dist_atr:.1f}xATR dari EMA50 - rawan kejar lembah",
-                        "confidence": score / 100, "score": score, "grade": grade
-                    }
+                if not strong_trend:
+                    if direction == "BUY" and dist_atr >= 1.2:
+                        return {
+                            "action": "NO_TRADE",
+                            "reason": f"Buy extended {dist_atr:.1f}xATR dari EMA50 - rawan kejar puncak",
+                            "confidence": score / 100, "score": score, "grade": grade
+                        }
+                    if direction == "SELL" and dist_atr >= 1.2:
+                        return {
+                            "action": "NO_TRADE",
+                            "reason": f"Sell extended {dist_atr:.1f}xATR dari EMA50 - rawan kejar lembah",
+                            "confidence": score / 100, "score": score, "grade": grade
+                        }
         except Exception:
             pass
 
@@ -156,7 +178,11 @@ class DecisionEngine:
         # Rebound guard: tolak entry dekat tepi
         # range 20 candle M5 (SELL di dekat low =
         # jual di dasar jelang rebound, BUY di
-        # dekat high = beli di puncak jelang koreksi)
+        # dekat high = beli di puncak jelang koreksi).
+        # ADAPTIF: hanya aktif saat trend LEMAH.
+        # Saat trend kuat, dekat tepi range adalah
+        # breakout valid (pakai flag strong_trend
+        # tunggal yang sama dengan guard lain).
         # =====================================
         try:
             _r_close = float(scalp_result.get("close", 0) or 0)
@@ -164,14 +190,14 @@ class DecisionEngine:
             _r_low = float(scalp_result.get("range_low", 0) or 0)
             _r_atr = float(scalp_result.get("atr", 0) or 0)
             if _r_close > 0 and _r_low > 0 and _r_atr > 0:
-                if direction == "SELL" and _r_close <= _r_low + _r_atr:
+                if direction == "SELL" and _r_close <= _r_low + _r_atr and not strong_trend:
                     return {
                         "action": "NO_TRADE",
                         "reason": f"Sell di dekat low range ({_r_close:.2f} <= low {_r_low:.2f} + {_r_atr:.2f} ATR) - rawan rebound naik",
                         "confidence": score / 100, "score": score, "grade": grade
                     }
             if _r_close > 0 and _r_high > 0 and _r_atr > 0:
-                if direction == "BUY" and _r_close >= _r_high - _r_atr:
+                if direction == "BUY" and _r_close >= _r_high - _r_atr and not strong_trend:
                     return {
                         "action": "NO_TRADE",
                         "reason": f"Buy di dekat high range ({_r_close:.2f} >= high {_r_high:.2f} - {_r_atr:.2f} ATR) - rawan koreksi turun",
@@ -201,17 +227,21 @@ class DecisionEngine:
         if prediction:
             ai_signal = prediction.get("signal", "WAIT")
             ai_conf = prediction.get("confidence", 0)
-            if ai_signal in ("BUY", "SELL") and ai_conf >= 55 and direction != ai_signal:
+            if ai_conf > 1:
+                ai_conf = ai_conf / 100.0
+            # AI hanya konfirmasi trend: blokir hanya jika AI SEARAH
+            # dengan arah trend M5/M15 (higher_trend). Jika AI melawan
+            # trend M5/M15 (mis. AI BUY saat M5/M15 DOWN), AI dianggap
+            # salah/tidak valid -> jangan blokir entry yang searah trend.
+            ai_aligned_trend = (higher_trend in ("BUY", "SELL")) and (ai_signal == higher_trend)
+            if ai_aligned_trend and ai_conf >= 0.55 and direction != ai_signal:
                 return {
                     "action": "NO_TRADE",
-                    "reason": f"Scalp {direction} vs AI {ai_signal} ({ai_conf:.0f}%) - berlawanan arah",
+                    "reason": f"Scalp {direction} vs AI {ai_signal} ({ai_conf:.0%}) - berlawanan arah",
                     "confidence": score / 100,
                     "score": score,
                     "grade": grade
                 }
-
-        trend = regime.get("trend", "SIDEWAYS") if regime else "SIDEWAYS"
-        expected_dir = self.trend_map.get(trend)
 
         if expected_dir is None:
             if score < self.min_scalp_score + self.sideways_penalty:

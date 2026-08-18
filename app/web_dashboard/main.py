@@ -1393,7 +1393,11 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 .tv-main { display:grid; grid-template-columns:1fr 340px; gap:12px; }
 @media(max-width:980px){ .tv-main { grid-template-columns:1fr; } }
 .tv-chart { background:rgba(30,41,59,0.5); border:1px solid rgba(59,130,246,0.08); border-radius:10px; padding:10px; min-height:560px; }
-.tv-side { display:flex; flex-direction:column; gap:12px; }
+.tv-check { display:flex; flex-direction:column; gap:12px; min-width:0; }
+.tv-side { display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; grid-column:1 / -1; }
+@media(max-width:1280px){ .tv-side { grid-template-columns:repeat(3, 1fr); } }
+@media(max-width:980px){ .tv-side { grid-template-columns:1fr; } }
+.tv-side > * { min-width:0; }
 .tv-signal { background:rgba(30,41,59,0.6); border:1px solid rgba(59,130,246,0.08); border-radius:10px; padding:14px; }
 .tv-signal-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
 .tv-signal-head .lbl { font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; }
@@ -1790,6 +1794,18 @@ tr:hover td { background:rgba(59,130,246,0.05); }
     <div id="tv_chart" style="min-height:520px;border-radius:8px;overflow:hidden"></div>
   </div>
 
+  <div class="tv-check">
+    <div class="tv-signal" id="tvCkCard">
+      <div class="tv-signal-head">
+        <span class="lbl">Checklist Syarat Entry</span>
+        <span class="lbl" id="tvCkSummary" style="color:#64748b">-</span>
+      </div>
+      <div id="tvCkBody">
+        <div style="font-size:12px;color:#64748b;padding:8px 0">Memuat checklist...</div>
+      </div>
+    </div>
+  </div>
+
   <div class="tv-side">
 
     <div class="tv-signal">
@@ -1816,16 +1832,6 @@ tr:hover td { background:rgba(59,130,246,0.05); }
     <div class="tv-risk">
       <div class="tv-signal-head"><span class="lbl">Risk &amp; Filter</span></div>
       <div class="tv-risk-grid" id="tvRiskGrid"></div>
-    </div>
-
-    <div class="tv-signal" style="margin-top:10px">
-      <div class="tv-signal-head">
-        <span class="lbl">Checklist Syarat Entry</span>
-        <span class="lbl" id="tvCkSummary" style="color:#64748b">-</span>
-      </div>
-      <div id="tvCkBody">
-        <div style="font-size:12px;color:#64748b;padding:8px 0">Memuat checklist...</div>
-      </div>
     </div>
 
   </div>
@@ -2707,6 +2713,18 @@ async function closePosition(ticket) {
   } catch(e) { alert('Error: '+e.message); }
 }
 
+async function closeTVPosition(ticket) {
+  if (!confirm('Close posisi #'+ticket+'?')) return;
+  try {
+    const res = await fetch('/api/position/close', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:ticket})}).then(r=>r.json());
+    if (res.success) {
+      fetchTVMonitor();
+    } else {
+      alert('Gagal close: '+(res.error||'Unknown'));
+    }
+  } catch(e) { alert('Error: '+e.message); }
+}
+
 function sendManualOrder(dryRun) {
   const btn = event.target;
   btn.disabled = true;
@@ -3121,9 +3139,9 @@ async function fetchTVMonitor() {
   }
   const btnAuto = document.getElementById('btnAutoToggle');
   if (btnAuto) {
-    btnAuto.textContent = 'AUTOTRADE ' + (st.auto_trade_enabled ? 'ON' : 'OFF');
-    btnAuto.style.background = st.auto_trade_enabled ? '#22c55e' : '#334155';
-    btnAuto.style.color = st.auto_trade_enabled ? '#fff' : '#94a3b8';
+    btnAuto.textContent = st.auto_trade_enabled ? 'STOP AUTOTRADE' : 'START AUTOTRADE';
+    btnAuto.style.background = st.auto_trade_enabled ? '#ef4444' : '#22c55e';
+    btnAuto.style.color = '#fff';
   }
 
   const symbol = mtf.symbol || mon.symbol || 'XAUUSDc';
@@ -3270,7 +3288,8 @@ function renderTVPosition(positions) {
     '<div class="tv-pos-row"><span class="k">Stop Loss</span><span class="v">' + (p.sl || '-') + '</span></div>' +
     '<div class="tv-pos-row"><span class="k">Take Profit</span><span class="v">' + (p.tp || '-') + '</span></div>' +
     '<div class="tv-pos-row"><span class="k">Waktu</span><span class="v">' + (p.open_time || '-') + '</span></div>' +
-    '<div class="tv-pnl"><span class="pnl-lbl">Floating PnL</span><span class="pnl-val" style="color:' + pnlColor + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</span></div>';
+    '<div class="tv-pnl"><span class="pnl-lbl">Floating PnL</span><span class="pnl-val" style="color:' + pnlColor + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</span></div>' +
+    '<div style="margin-top:10px"><button onclick="closeTVPosition(' + p.ticket + ')" style="width:100%;padding:6px 0;background:#dc2626;color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600">Close Posisi</button></div>';
 }
 
 function renderTVRisk(mon, st) {

@@ -41,17 +41,16 @@ class MultiTimeframeConfirmation:
 
         # Strategi: hanya anggap trending jika ADX cukup kuat (>= min_adx)
         # supaya pasar sideways (ADX rendah) tidak dianggap "searah" palsu.
-        if adx < self.min_adx:
-            return "SIDEWAYS"
-
+        ema_trend = "SIDEWAYS"
         if close > ema20 > ema50:
-            trend = "UP"
+            ema_trend = "UP"
         elif close < ema20 < ema50:
-            trend = "DOWN"
-        else:
-            trend = "SIDEWAYS"
+            ema_trend = "DOWN"
 
-        return trend
+        if adx < self.min_adx:
+            return "SIDEWAYS", ema_trend
+
+        return ema_trend, ema_trend
 
     def confirm(self, prediction, last_primary=None, signal=None):
 
@@ -69,9 +68,10 @@ class MultiTimeframeConfirmation:
                 if df.empty:
                     continue
                 last = df.iloc[-1]
-                trend = self._trend_at_bar(last)
+                trend, ema_trend = self._trend_at_bar(last)
                 tf_results[tf] = {
                     "trend": trend,
+                    "ema_trend": ema_trend,
                     "close": last["close"],
                     "ema20": last["EMA20"],
                     "ema50": last["EMA50"],
