@@ -82,6 +82,29 @@ class ATRProtectionManager:
         is_buy = position.type == 0
 
         # ======================================
+        # MINIMUM SL GUARD: pastikan SL tidak
+        # terlalu dekat ke entry. Jika SL sudah
+        # ada tapi kurang dari sl_atr_mult * atr
+        # dari entry, update ke jarak minimum.
+        # ======================================
+        min_dist = self.sl_atr_mult * atr
+        if position.sl != 0 and min_dist > 0:
+            if is_buy:
+                min_sl = round(position.price_open - min_dist, 5)
+                if position.sl > min_sl:
+                    result = self.controller.modify_sl(position, min_sl)
+                    return {"status": "UPDATED", "action": "MIN_SL_GUARD",
+                            "reason": f"SL terlalu dekat ({position.sl:.2f}), diupdate ke minimum {min_dist:.1f}xATR ({min_sl:.2f}).",
+                            "new_stop_loss": min_sl, "result": result}
+            else:
+                min_sl = round(position.price_open + min_dist, 5)
+                if position.sl < min_sl:
+                    result = self.controller.modify_sl(position, min_sl)
+                    return {"status": "UPDATED", "action": "MIN_SL_GUARD",
+                            "reason": f"SL terlalu dekat ({position.sl:.2f}), diupdate ke minimum {min_dist:.1f}xATR ({min_sl:.2f}).",
+                            "new_stop_loss": min_sl, "result": result}
+
+        # ======================================
         # Emergency: loss > 2.5x ATR -> close
         # ======================================
         emergency_loss = self.emergency_atr * atr

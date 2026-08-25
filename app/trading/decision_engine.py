@@ -5,7 +5,7 @@ class DecisionEngine:
         self.sideways_penalty = 15
         self.trend_map = {"UP": "BUY", "DOWN": "SELL", "SIDEWAYS": None}
 
-    def decide(self, prediction=None, scalp_result=None, regime=None, higher_trend=None) -> dict:
+    def decide(self, prediction=None, scalp_result=None, regime=None, higher_trend=None, higher_adx=0) -> dict:
         if scalp_result is None or regime is None:
             return {"action": "NO_TRADE", "reason": "Data tidak tersedia", "confidence": 0}
 
@@ -20,14 +20,17 @@ class DecisionEngine:
         # EMA50 guard, dan Rebound guard di
         # bawah (bukan re-implementasi terpisah).
         # Definisi: mode TREND + ADX M5 >= 30 +
-        # trend searah sinyal.
+        # trend searah sinyal. ADX dari M5/M15
+        # (higher_adx) ikut dipertimbangkan supaya
+        # trend kuat di higher TF tidak diblokir
+        # oleh guard yang menargetkan kejar puncak.
         # =====================================
         trend = regime.get("trend", "SIDEWAYS") if regime else "SIDEWAYS"
         mode = regime.get("mode", "RANGING") if regime else "RANGING"
         adx = regime.get("adx", 0) if regime else 0
         expected_dir = self.trend_map.get(trend)
-        strong_trend = (mode == "TREND" and adx >= 30
-                        and expected_dir == direction)
+        strong_trend = (expected_dir == direction
+                        and (adx >= 30 or higher_adx >= 30))
 
         if score < self.min_scalp_score:
             return {
@@ -65,6 +68,26 @@ class DecisionEngine:
             return {
                 "action": "NO_TRADE",
                 "reason": f"Momentum candle terakhir melawan ({last_body}, akselerasi {accel:.2f}) - rawan gerakan tajam",
+                "confidence": score / 100,
+                "score": score,
+                "grade": grade
+            }
+
+        # =====================================
+        # Momentum filter: tolak entry jika arah
+        # momentum htf (M5 default) melawan sinyal.
+        # Momentum engine menghitung arah dari 2 dari
+        # 3 candle terakhir. Jika BUY tapi 2 dari 3
+        # candle M5 terakhir turun, momentum membaca
+        # SELL -> harga mulai berbalik, jangan entry
+        # walaupun trend M5/M15 masih "UP".
+        # =====================================
+        mom_dir = momentum.get("direction", "NEUTRAL")
+        if mom_dir in ("BUY", "SELL") and mom_dir != direction:
+            return {
+                "action": "NO_TRADE",
+                "reason": f"Momentum {momentum.get('tf', 'M5')} {mom_dir} melawan sinyal {direction} "
+                          f"({momentum.get('bull_bodies', 0)}U/{momentum.get('bear_bodies', 0)}D) - tunggu searah",
                 "confidence": score / 100,
                 "score": score,
                 "grade": grade

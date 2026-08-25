@@ -565,10 +565,10 @@ class LiveEngine:
     # Decision
     # =====================================
 
-    def decide(self, prediction, scalp_result=None, regime=None, higher_trend=None):
+    def decide(self, prediction, scalp_result=None, regime=None, higher_trend=None, higher_adx=0):
 
         return self.decision_engine.decide(
-            prediction, scalp_result, regime, higher_trend
+            prediction, scalp_result, regime, higher_trend, higher_adx
         )
 
     # =====================================
@@ -850,22 +850,32 @@ class LiveEngine:
             self.decision_engine.min_scalp_score = self._current_min_score()
 
             higher_trend = None
+            higher_adx = 0
             try:
                 tf_details = (tf_confirmation or {}).get("details", {}) or {}
                 _dirs = []
+                _adxs = []
                 for _tf, _info in tf_details.items():
                     if isinstance(_info, dict) and _info.get("ema_trend") in ("UP", "DOWN"):
                         _dirs.append(self.decision_engine.trend_map.get(_info["ema_trend"]))
+                        _adxs.append(float(_info.get("adx", 0) or 0))
                 if _dirs and all(d == _dirs[0] for d in _dirs):
                     higher_trend = _dirs[0]
+                    higher_adx = max(_adxs) if _adxs else 0
             except Exception:
                 higher_trend = None
+                higher_adx = 0
+
+            # =====================================
+            # Decision
+            # =====================================
 
             decision = self.decide(
                 prediction,
                 scalp_result,
                 regime,
                 higher_trend,
+                higher_adx,
             )
 
             DecisionView.show(
@@ -1446,7 +1456,12 @@ class LiveEngine:
             print(f"Saved : {log_file}")
 
             ticket = None
-            if result.get("result") and hasattr(result["result"], "order"):
+            if result.get("results"):
+                for _r in result["results"]:
+                    if _r.get("success") and hasattr(_r["result"], "order"):
+                        ticket = _r["result"].order
+                        break
+            elif result.get("result") and hasattr(result["result"], "order"):
                 ticket = result["result"].order
 
             if ticket:
@@ -1915,8 +1930,11 @@ class LiveEngine:
             }
             with open("runtime/entry_checklist.json", "w") as _f:
                 json.dump(payload, _f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
+        except Exception as e:
+            import traceback
+            with open("runtime/checklist_error.log", "a") as _elog:
+                _elog.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} ERROR: {e}\n")
+                _elog.write(traceback.format_exc() + "\n")
 
     @staticmethod
     def _ck(label, ok, detail):

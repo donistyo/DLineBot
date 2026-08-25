@@ -76,7 +76,7 @@ def cached(ttl=5):
 # Background MT5 cache (biar ga blocking)
 # =====================================
 
-_mt5_cache = {"positions": [], "pending": [], "account": {}, "last_update": 0}
+_mt5_cache = {"positions": [], "pending": [], "account": {}, "tick": {}, "last_update": 0}
 _mt5_lock = threading.Lock()
 
 def _refresh_mt5_cache():
@@ -85,6 +85,12 @@ def _refresh_mt5_cache():
         try:
             MT5Session.connect()
             with _mt5_lock:
+                try:
+                    _t = mt5.symbol_info_tick(_active_symbol())
+                    if _t:
+                        _mt5_cache["tick"] = {"bid": _t.bid, "ask": _t.ask}
+                except Exception:
+                    pass
                 acc = mt5.account_info()
                 if acc:
                     _mt5_cache["account"] = {
@@ -817,11 +823,14 @@ def api_auto_trade_monitor():
             (p["type"] == "BUY" and p["sl"] > p["open_price"] + 0.01) or
             (p["type"] == "SELL" and p["sl"] < p["open_price"] - 0.01)
         )
+        cur = p.get("current_price") or 0
+        dist = round((cur - p["open_price"]) if p["type"] == "BUY" else (p["open_price"] - cur), 2)
         pos_out.append({
             "ticket": p["ticket"], "type": p["type"], "volume": p["volume"],
-            "open_price": p["open_price"], "current": p["current_price"],
+            "open_price": p["open_price"], "current": cur,
             "profit": p["profit"], "sl": p["sl"], "tp": p["tp"],
             "open_time": p.get("open_time", ""),
+            "dist": dist,
             "be": be, "ts": ts
         })
 
@@ -844,6 +853,7 @@ def api_auto_trade_monitor():
         "scalp": scalp_raw,
         "positions": pos_out,
         "pending_orders": pending,
+        "tick": dict(_mt5_cache.get("tick", {})),
         "last_update": time.strftime("%H:%M:%S"),
         "auto_trade_enabled": _enabled,
         "lot_size": _lot,
@@ -3168,7 +3178,7 @@ async function fetchTVMonitor() {
   }
 
   renderTVSignal(scalp.scalp_score || {}, mtf.tfs || {});
-  renderTVPosition(mon.positions || []);
+  renderTVPosition(mon.positions || [], mon.tick || {});
   renderTVRisk(mon, st);
   renderTvChecklist(ck);
 }
@@ -3265,7 +3275,7 @@ function renderTVSignal(ss, tfs) {
   }
 }
 
-function renderTVPosition(positions) {
+function renderTVPosition(positions, tick) {
   const body = document.getElementById('tvPosBody');
   const tag = document.getElementById('tvPosTag');
   if (!body) return;
@@ -3282,9 +3292,13 @@ function renderTVPosition(positions) {
   const pnl = p.profit || 0;
   const pnlColor = pnl >= 0 ? '#6ee7b7' : '#fca5a5';
   const pct = p.volume * 100;
+  const live = (isBuy ? (tick && tick.bid) : (tick && tick.ask)) || p.current;
+  const liveColor = isBuy ? '#6ee7b7' : '#fca5a5';
   body.innerHTML =
     '<div class="tv-pos-row"><span class="k">Arah</span><span class="v" style="color:' + (isBuy ? '#6ee7b7' : '#fca5a5') + '">' + (isBuy ? 'BUY' : 'SELL') + ' ' + pct.toFixed(2).replace('.00','') + ' lot</span></div>' +
     '<div class="tv-pos-row"><span class="k">Entry</span><span class="v">' + p.open_price + '</span></div>' +
+    '<div class="tv-pos-row"><span class="k">Live ' + (isBuy ? 'Bid' : 'Ask') + '</span><span class="v" style="color:' + liveColor + '">' + live + '</span></div>' +
+    '<div class="tv-pos-row"><span class="k">Jarak Entry</span><span class="v">' + (p.dist !== undefined && p.dist !== null ? (p.dist >= 0 ? '+' : '') + p.dist : '-') + '</span></div>' +
     '<div class="tv-pos-row"><span class="k">Stop Loss</span><span class="v">' + (p.sl || '-') + '</span></div>' +
     '<div class="tv-pos-row"><span class="k">Take Profit</span><span class="v">' + (p.tp || '-') + '</span></div>' +
     '<div class="tv-pos-row"><span class="k">Waktu</span><span class="v">' + (p.open_time || '-') + '</span></div>' +

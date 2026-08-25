@@ -209,10 +209,17 @@ def _mt5_trade_rows(limit: int = 40) -> list:
 
         seen = {}
         for d in deals:
+            # Tampilkan arah POSISI, bukan arah deal. Di MT5 menutup posisi
+            # BUY = deal SELL (dan sebaliknya), sehingga deal close selalu
+            # berlawanan arah. Balik untuk deal entry OUT agar konsisten.
+            if d.entry == 1:
+                sig = "SELL" if d.type == 0 else "BUY"
+            else:
+                sig = "BUY" if d.type == 0 else "SELL"
             rows.append({
                 "ts": datetime.fromtimestamp(d.time).strftime("%Y-%m-%d %H:%M:%S"),
                 "symbol": d.symbol,
-                "signal": "BUY" if d.type == 0 else "SELL",
+                "signal": sig,
                 "status": "CLOSED" if d.entry == 1 else "OPENED",
                 "reason": (d.comment or "").replace(" CLOSE", "").strip() or ("Close" if d.entry == 1 else "Open"),
                 "volume": d.volume,

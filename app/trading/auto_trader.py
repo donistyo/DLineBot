@@ -17,6 +17,14 @@ class AutoTrader:
         self.order_sender = OrderSender(dry_run=dry_run)
         self.pending_manager = PendingOrderManager(dry_run=dry_run)
 
+    def _entry_copies(self):
+        try:
+            import json
+            with open("runtime/trade_config.json") as f:
+                return max(1, int(json.load(f).get("entry_copies", 1)))
+        except Exception:
+            return 1
+
     def execute(
         self,
         decision,
@@ -57,18 +65,22 @@ class AutoTrader:
         # ======================================
 
         signal = decision["action"]
-        if signal == "BUY":
-            request = self.order_builder.buy(
-                symbol, risk["lot_size"], risk["entry_price"],
-                risk["stop_loss"], risk["take_profit"]
-            )
-        elif signal == "SELL":
-            request = self.order_builder.sell(
-                symbol, risk["lot_size"], risk["entry_price"],
-                risk["stop_loss"], risk["take_profit"]
-            )
-        else:
-            return {"status": "SKIPPED", "reason": f"Unknown signal: {signal}"}
+        copies = self._entry_copies()
+        requests = []
+        for i in range(copies):
+            comment = f"DLineBot #{i + 1}" if copies > 1 else "DLineBot"
+            if signal == "BUY":
+                requests.append(self.order_builder.buy(
+                    symbol, risk["lot_size"], risk["entry_price"],
+                    risk["stop_loss"], risk["take_profit"], comment=comment
+                ))
+            elif signal == "SELL":
+                requests.append(self.order_builder.sell(
+                    symbol, risk["lot_size"], risk["entry_price"],
+                    risk["stop_loss"], risk["take_profit"], comment=comment
+                ))
+            else:
+                return {"status": "SKIPPED", "reason": f"Unknown signal: {signal}"}
 
         # ======================================
         # Dry Run
@@ -80,7 +92,7 @@ class AutoTrader:
 
                 "status": "DRY_RUN",
 
-                "request": request
+                "request": requests if copies > 1 else requests[0]
 
             }
 
@@ -88,15 +100,25 @@ class AutoTrader:
         # Real Order
         # ======================================
 
-        result = self.order_sender.send(request)
-        success = isinstance(result, dict) and result.get("success", False)
+        results = []
+        for request in requests:
+            result = self.order_sender.send(request)
+            success = isinstance(result, dict) and result.get("success", False)
+            results.append({
+                "success": success,
+                "result": result,
+                "reason": "" if success else str(result.get("errors", result))
+            })
 
+        all_success = all(r["success"] for r in results)
         return {
 
-            "status": "SUCCESS" if success else "FAILED",
+            "status": "SUCCESS" if all_success else "FAILED",
 
-            "result": result,
-            "reason": "" if success else str(result.get("errors", result))
+            "results": results,
+            "reason": "" if all_success else "; ".join(
+                r["reason"] for r in results if not r["success"]
+            )
 
         }
 
