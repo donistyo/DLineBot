@@ -823,16 +823,6 @@ class LiveEngine:
             ConfidenceView.show(confidence_result)
 
             # ===============================
-            # Multi Timeframe Confirmation
-            # ===============================
-
-            tf_confirmation = self.multi_tf.confirm(
-                prediction, last
-            )
-
-            MultiTFView.show(tf_confirmation)
-
-            # ===============================
             # Smart Scalping Engine
             # ===============================
 
@@ -842,6 +832,18 @@ class LiveEngine:
             with open("runtime/scalping.json", "w") as f:
                 json.dump(scalp_result, f, default=str, indent=2)
             self._scalp_result = scalp_result
+
+            # ===============================
+            # Multi Timeframe Confirmation
+            # (setelah scalp engine agar bisa pakai scalp direction)
+            # ===============================
+
+            scalp_dir = (scalp_result or {}).get("scalp_score", {}).get("direction", "NEUTRAL")
+            tf_signal = scalp_dir if scalp_dir in ("BUY", "SELL") else None
+            tf_confirmation = self.multi_tf.confirm(
+                prediction, last, signal=tf_signal
+            )
+            MultiTFView.show(tf_confirmation)
 
             # ===============================
             # Decision
@@ -881,12 +883,6 @@ class LiveEngine:
             DecisionView.show(
                 decision
             )
-
-            if decision.get("action") in ("BUY", "SELL"):
-                tf_confirmation = self.multi_tf.confirm(
-                    prediction, last, signal=decision["action"]
-                )
-                MultiTFView.show(tf_confirmation)
 
             # ===============================
             # Proposed Trade
