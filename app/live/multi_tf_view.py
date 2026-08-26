@@ -20,6 +20,7 @@ class MultiTFView:
         if details:
             print()
             for tf, info in details.items():
-                trend = info.get("trend", "?")
+                mode = info.get("mode", "?")
+                trend = info.get("ema_trend", info.get("trend", "?"))
                 adx = info.get("adx", 0)
-                print(f"  {tf:>4} : {trend:<8} ADX {adx:.1f}")
+                print(f"  {tf:>4} : {mode:<8} {trend:<6} ADX {adx:.1f}")

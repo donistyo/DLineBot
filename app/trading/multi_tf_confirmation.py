@@ -1,6 +1,7 @@
 from app.data.collector import Collector
 from app.indicators.engine import IndicatorEngine
 from app.preprocessing.cleaner import DataCleaner
+from app.trading.regime_logic import classify_regime, multi_tf_decision
 
 
 class MultiTimeframeConfirmation:
@@ -32,35 +33,14 @@ class MultiTimeframeConfirmation:
         df = self.cleaner.clean(df)
         return df
 
-    def _trend_at_bar(self, row):
-        close = row["close"]
-        ema20 = row["EMA20"]
-        ema50 = row["EMA50"]
-        ema200 = row["EMA200"]
-        adx = row["ADX"]
-
-        # Strategi: hanya anggap trending jika ADX cukup kuat (>= min_adx)
-        # supaya pasar sideways (ADX rendah) tidak dianggap "searah" palsu.
-        ema_trend = "SIDEWAYS"
-        if close > ema20 > ema50:
-            ema_trend = "UP"
-        elif close < ema20 < ema50:
-            ema_trend = "DOWN"
-
-        if adx < self.min_adx:
-            return "SIDEWAYS", ema_trend
-
-        return ema_trend, ema_trend
-
     def confirm(self, prediction, last_primary=None, signal=None):
 
         if signal is None:
-            signal = prediction.get("signal", "HOLD")
-        confidence = prediction.get("confidence", 0)
+            signal = prediction.get("signal", "HOLD") if prediction else "HOLD"
+        confidence = prediction.get("confidence", 0) if prediction else 0
 
         tf_results = {}
-        aligned = 0
-        total = 0
+        regimes = {}
 
         for tf in self.higher_tfs:
             try:
@@ -68,31 +48,26 @@ class MultiTimeframeConfirmation:
                 if df.empty:
                     continue
                 last = df.iloc[-1]
-                trend, ema_trend = self._trend_at_bar(last)
+                regime = classify_regime(
+                    close=last["close"],
+                    ema20=last["EMA20"],
+                    ema50=last["EMA50"],
+                    adx=last["ADX"]
+                )
+                regimes[tf] = regime
                 tf_results[tf] = {
-                    "trend": trend,
-                    "ema_trend": ema_trend,
+                    "trend": regime.mode,
+                    "ema_trend": regime.trend or "SIDEWAYS",
+                    "mode": regime.mode,
                     "close": last["close"],
                     "ema20": last["EMA20"],
                     "ema50": last["EMA50"],
                     "adx": last["ADX"]
                 }
-
-                if signal == "BUY":
-                    if trend == "UP":
-                        aligned += 1
-                elif signal == "SELL":
-                    if trend == "DOWN":
-                        aligned += 1
-                elif signal == "HOLD":
-                    aligned += 1
-
-                total += 1
-
             except Exception as e:
                 tf_results[tf] = {"error": str(e)}
 
-        if total == 0:
+        if len(regimes) < 2:
             return {
                 "allowed": True,
                 "reason": "Tidak ada data timeframe lain.",
@@ -100,24 +75,27 @@ class MultiTimeframeConfirmation:
                 "details": tf_results
             }
 
-        alignment_pct = aligned / total if total > 0 else 0
+        regime_m5 = regimes.get("M5")
+        regime_m15 = regimes.get("M15")
 
-        tf_confirmed = alignment_pct >= 1.0
+        if regime_m5 is None or regime_m15 is None:
+            return {
+                "allowed": True,
+                "reason": "Data M5/M15 tidak lengkap.",
+                "alignment": 0,
+                "details": tf_results
+            }
 
-        if not tf_confirmed:
-            reason = (
-                f"Higher TF menolak ({aligned}/{total} searah, butuh semua searah)"
-            )
-        elif alignment_pct == 1.0:
-            reason = "Semua timeframe searah."
-        else:
-            reason = f"{aligned}/{total} timeframe searah."
+        allow, alignment_score, reason = multi_tf_decision(
+            regime_m5, regime_m15, signal
+        )
 
         return {
-            "allowed": tf_confirmed,
+            "allowed": allow,
             "reason": reason,
-            "alignment": round(alignment_pct, 2),
-            "aligned_count": aligned,
-            "total_count": total,
+            "alignment": round(alignment_score / 2.0, 2),
+            "aligned_count": int(alignment_score),
+            "total_count": 2,
+            "alignment_score": alignment_score,
             "details": tf_results
         }
