@@ -32,6 +32,62 @@ class SmartScalpingEngine:
         # =====================================
         momentum = self._momentum_htf() or self._momentum(candles)
         momentum["tf"] = self.direction_tf
+
+        # =====================================
+        # Trend Alignment Check
+        # Paksa arah sinyal searah trend jika ADX cukup kuat
+        # Ambil EMA dari timeframe sama (M5 default)
+        # =====================================
+        try:
+            import MetaTrader5 as mt5
+            tf_map = {
+                "M1": mt5.TIMEFRAME_M1, "M5": mt5.TIMEFRAME_M5,
+                "M15": mt5.TIMEFRAME_M15, "M30": mt5.TIMEFRAME_M30,
+                "H1": mt5.TIMEFRAME_H1, "H4": mt5.TIMEFRAME_H4,
+            }
+            tf_code = tf_map.get(self.direction_tf, mt5.TIMEFRAME_M5)
+            rates = mt5.copy_rates_from_pos(self.symbol, tf_code, 0, 200)
+            if rates is not None and len(rates) >= 50:
+                import pandas as _pd
+                htf = _pd.DataFrame(rates)
+                htf["close"] = htf["close"].astype(float)
+                htf["EMA20"] = htf["close"].ewm(span=20).mean()
+                htf["EMA50"] = htf["close"].ewm(span=50).mean()
+
+                htf["diff"] = htf["high"] - htf["low"]
+                htf["plus_dm"] = 0.0
+                htf["minus_dm"] = 0.0
+                for i in range(1, len(htf)):
+                    up = htf.iloc[i]["high"] - htf.iloc[i-1]["high"]
+                    down = htf.iloc[i-1]["low"] - htf.iloc[i]["low"]
+                    htf.iloc[i, htf.columns.get_loc("plus_dm")] = up if up > down and up > 0 else 0
+                    htf.iloc[i, htf.columns.get_loc("minus_dm")] = down if down > up and down > 0 else 0
+                htf["ATR"] = htf["diff"].ewm(span=14).mean()
+                htf["plus_di"] = 100 * (htf["plus_dm"].ewm(span=14).mean() / htf["ATR"])
+                htf["minus_di"] = 100 * (htf["minus_dm"].ewm(span=14).mean() / htf["ATR"])
+                dx = abs(htf["plus_di"] - htf["minus_di"]) / (htf["plus_di"] + htf["minus_di"]) * 100
+                htf["ADX"] = dx.ewm(span=14).mean()
+
+                htf_row = htf.iloc[-1]
+                adx = float(htf_row["ADX"])
+                close = float(htf_row["close"])
+                ema20 = float(htf_row["EMA20"])
+                ema50 = float(htf_row["EMA50"])
+
+                if adx > 20 and ema20 > 0 and ema50 > 0:
+                    ema_bearish = close < ema20 < ema50
+                    ema_bullish = close > ema20 > ema50
+                    raw_dir = momentum.get("direction", "NEUTRAL")
+
+                    if ema_bearish and raw_dir == "BUY":
+                        momentum["direction"] = "SELL"
+                        momentum["trend_override"] = "EMA_BEARISH"
+                    elif ema_bullish and raw_dir == "SELL":
+                        momentum["direction"] = "BUY"
+                        momentum["trend_override"] = "EMA_BULLISH"
+        except Exception:
+            pass
+
         result["momentum"] = momentum
 
         # =====================================
@@ -508,11 +564,15 @@ class SmartScalpingEngine:
 
         momentum = engines.get("momentum", {})
         direction = momentum.get("direction", "NEUTRAL")
+        trend_override = momentum.get("trend_override")
 
-        return {
+        result = {
             "score": final_score,
             "grade": grade,
             "direction": direction,
             "details": details,
             "action": "TRADE" if final_score >= 50 else "WAIT"
         }
+        if trend_override:
+            result["trend_override"] = trend_override
+        return result
