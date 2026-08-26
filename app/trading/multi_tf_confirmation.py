@@ -86,8 +86,10 @@ class MultiTimeframeConfirmation:
                 "details": tf_results
             }
 
+        signal_map = {"BUY": "UP", "SELL": "DOWN"}
+        tf_signal = signal_map.get(signal, signal)
         allow, alignment_score, reason = multi_tf_decision(
-            regime_m5, regime_m15, signal
+            regime_m5, regime_m15, tf_signal
         )
 
         return {
