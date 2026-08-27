@@ -1122,8 +1122,8 @@ class LiveEngine:
 
             reentry_reason = self._reentry_blocked(
                 decision["action"],
-                cooldown_minutes=15,
-                cooldown_win_minutes=float(get_trade_config("reentry_cooldown_win_min", 15.0)),
+                cooldown_minutes=10,
+                cooldown_win_minutes=float(get_trade_config("reentry_cooldown_win_min", 10.0)),
             )
             same_dir_reason = self._same_dir_spacing_blocked(decision["action"])
 
