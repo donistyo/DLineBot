@@ -1833,7 +1833,7 @@ class LiveEngine:
             self._score_penalty = 0
 
     def _current_min_score(self):
-        return 65 + self._score_penalty
+        return 70 + self._score_penalty
 
     # =====================================
     # Entry Checklist (live menuju dashboard)
