@@ -35,8 +35,7 @@ class SmartScalpingEngine:
 
         # =====================================
         # Trend Alignment Check
-        # Paksa arah sinyal searah trend jika ADX cukup kuat
-        # Ambil EMA dari timeframe sama (M5 default)
+        # Cek M5 + M15. Kalau salah satu jelas bearish/bullish, paksa arah.
         # =====================================
         try:
             import MetaTrader5 as mt5
@@ -45,15 +44,16 @@ class SmartScalpingEngine:
                 "M15": mt5.TIMEFRAME_M15, "M30": mt5.TIMEFRAME_M30,
                 "H1": mt5.TIMEFRAME_H1, "H4": mt5.TIMEFRAME_H4,
             }
-            tf_code = tf_map.get(self.direction_tf, mt5.TIMEFRAME_M5)
-            rates = mt5.copy_rates_from_pos(self.symbol, tf_code, 0, 200)
-            if rates is not None and len(rates) >= 50:
+
+            def _get_ema_adx(tf_code, bars=200):
+                rates = mt5.copy_rates_from_pos(self.symbol, tf_code, 0, bars)
+                if rates is None or len(rates) < 50:
+                    return None
                 import pandas as _pd
                 htf = _pd.DataFrame(rates)
                 htf["close"] = htf["close"].astype(float)
                 htf["EMA20"] = htf["close"].ewm(span=20).mean()
                 htf["EMA50"] = htf["close"].ewm(span=50).mean()
-
                 htf["diff"] = htf["high"] - htf["low"]
                 htf["plus_dm"] = 0.0
                 htf["minus_dm"] = 0.0
@@ -67,24 +67,64 @@ class SmartScalpingEngine:
                 htf["minus_di"] = 100 * (htf["minus_dm"].ewm(span=14).mean() / htf["ATR"])
                 dx = abs(htf["plus_di"] - htf["minus_di"]) / (htf["plus_di"] + htf["minus_di"]) * 100
                 htf["ADX"] = dx.ewm(span=14).mean()
+                row = htf.iloc[-1]
+                return float(row["close"]), float(row["EMA20"]), float(row["EMA50"]), float(row["ADX"])
 
-                htf_row = htf.iloc[-1]
-                adx = float(htf_row["ADX"])
-                close = float(htf_row["close"])
-                ema20 = float(htf_row["EMA20"])
-                ema50 = float(htf_row["EMA50"])
+            raw_dir = momentum.get("direction", "NEUTRAL")
+            override = None
 
-                if adx > 20 and ema20 > 0 and ema50 > 0:
-                    ema_bearish = close < ema20 < ema50
-                    ema_bullish = close > ema20 > ema50
-                    raw_dir = momentum.get("direction", "NEUTRAL")
+            # Cek M5
+            tf5 = tf_map.get(self.direction_tf, mt5.TIMEFRAME_M5)
+            m5_data = _get_ema_adx(tf5)
+            if m5_data:
+                c5, e20_5, e50_5, adx5 = m5_data
+                # Cek arah candle M5 terakhir
+                rates5 = mt5.copy_rates_from_pos(self.symbol, tf5, 0, 5)
+                candle_bearish_5 = False
+                candle_bullish_5 = False
+                if rates5 is not None and len(rates5) >= 2:
+                    last_candle = rates5[-1]
+                    candle_bearish_5 = float(last_candle["close"]) < float(last_candle["open"])
+                    candle_bullish_5 = float(last_candle["close"]) > float(last_candle["open"])
 
-                    if ema_bearish and raw_dir == "BUY":
-                        momentum["direction"] = "SELL"
-                        momentum["trend_override"] = "EMA_BEARISH"
-                    elif ema_bullish and raw_dir == "SELL":
-                        momentum["direction"] = "BUY"
-                        momentum["trend_override"] = "EMA_BULLISH"
+                if adx5 > 20 and e20_5 > 0 and e50_5 > 0:
+                    ema_bearish_5 = c5 < e20_5 < e50_5
+                    ema_bullish_5 = c5 > e20_5 > e50_5
+
+                    if ema_bearish_5 and candle_bearish_5 and raw_dir == "BUY":
+                        override = "M5_BEARISH"
+                    elif ema_bullish_5 and candle_bullish_5 and raw_dir == "SELL":
+                        override = "M5_BULLISH"
+
+            # Cek M15 sebagai backup
+            if override is None:
+                m15_data = _get_ema_adx(mt5.TIMEFRAME_M15)
+                if m15_data:
+                    c15, e20_15, e50_15, adx15 = m15_data
+                    # Cek juga arah candle M15 terakhir
+                    rates15 = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M15, 0, 5)
+                    candle_bearish = False
+                    candle_bullish = False
+                    if rates15 is not None and len(rates15) >= 2:
+                        last_candle = rates15[-1]
+                        candle_bearish = float(last_candle["close"]) < float(last_candle["open"])
+                        candle_bullish = float(last_candle["close"]) > float(last_candle["open"])
+
+                    if adx15 > 15 and e20_15 > 0 and e50_15 > 0:
+                        ema_bearish_15 = c15 < e20_15 < e50_15
+                        ema_bullish_15 = c15 > e20_15 > e50_15
+
+                        # Hanya paksa kalau EMA searah DAN candle searah
+                        if ema_bearish_15 and candle_bearish and raw_dir == "BUY":
+                            override = "M15_BEARISH"
+                        elif ema_bullish_15 and candle_bullish and raw_dir == "SELL":
+                            override = "M15_BULLISH"
+
+            if override:
+                new_dir = "SELL" if "BEARISH" in override else "BUY"
+                momentum["direction"] = new_dir
+                momentum["trend_override"] = override
+
         except Exception:
             pass
 
