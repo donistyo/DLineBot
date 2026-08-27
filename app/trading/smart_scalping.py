@@ -143,21 +143,48 @@ class SmartScalpingEngine:
                         momentum["trend_override"] = "M15_HARD_BLOCK_BULLISH"
 
             # ============================================
-            # HARD BLOCK M5: M5 TREND DOWN = BLOK BUY
-            # M5 TREND = ADX kuat + EMA bearish
-            # Jangan entry BUY saat M5 sedang turun kuat
+            # HARD BLOCK M5: M5 bearish = BLOK BUY
+            # Turunkan threshold ke ADX >= 25 supaya lebih banyak
+            # waktu BUY diblokir saat market turun
             # ============================================
             if m5_data:
                 c5, e20_5, e50_5, adx5 = m5_data
-                if adx5 >= 30 and e20_5 > 0 and e50_5 > 0:
+                if adx5 >= 25 and e20_5 > 0 and e50_5 > 0:
                     m5_trend_bearish = c5 < e20_5 < e50_5
                     m5_trend_bullish = c5 > e20_5 > e50_5
                     if m5_trend_bearish and momentum.get("direction") == "BUY":
                         momentum["direction"] = "NEUTRAL"
-                        momentum["trend_override"] = "M5_TREND_DOWN_BLOCK_BUY"
+                        momentum["trend_override"] = "M5_BEARISH_BLOCK_BUY"
                     elif m5_trend_bullish and momentum.get("direction") == "SELL":
                         momentum["direction"] = "NEUTRAL"
-                        momentum["trend_override"] = "M5_TREND_UP_BLOCK_SELL"
+                        momentum["trend_override"] = "M5_BULLISH_BLOCK_SELL"
+
+            # ============================================
+            # EXTENDED PRICE GUARD
+            # Jangan kejar harga yang sudah bergerak jauh
+            # Hitung jarak harga dari range recent
+            # ============================================
+            try:
+                if m5_data:
+                    rates_ext = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M5, 0, 50)
+                    if rates_ext is not None and len(rates_ext) >= 20:
+                        import pandas as _pd
+                        ext_df = _pd.DataFrame(rates_ext)
+                        ext_high = float(ext_df["high"].max())
+                        ext_low = float(ext_df["low"].min())
+                        ext_range = ext_high - ext_low
+                        if ext_range > 0:
+                            price_pos = (c5 - ext_low) / ext_range  # 0=bottom, 1=top
+                            # Extended di bawah: harga sudah jauh di bawah range → jangan SELL
+                            if price_pos < 0.15 and momentum.get("direction") == "SELL":
+                                momentum["direction"] = "NEUTRAL"
+                                momentum["trend_override"] = "EXTENDED_LOW_NO_SELL"
+                            # Extended di atas: harga sudah jauh di atas range → jangan BUY
+                            elif price_pos > 0.85 and momentum.get("direction") == "BUY":
+                                momentum["direction"] = "NEUTRAL"
+                                momentum["trend_override"] = "EXTENDED_HIGH_NO_BUY"
+            except Exception:
+                pass
 
         except Exception:
             pass
