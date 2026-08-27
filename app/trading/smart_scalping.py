@@ -142,6 +142,23 @@ class SmartScalpingEngine:
                         momentum["direction"] = "NEUTRAL"
                         momentum["trend_override"] = "M15_HARD_BLOCK_BULLISH"
 
+            # ============================================
+            # HARD BLOCK M5: M5 TREND DOWN = BLOK BUY
+            # M5 TREND = ADX kuat + EMA bearish
+            # Jangan entry BUY saat M5 sedang turun kuat
+            # ============================================
+            if m5_data:
+                c5, e20_5, e50_5, adx5 = m5_data
+                if adx5 >= 30 and e20_5 > 0 and e50_5 > 0:
+                    m5_trend_bearish = c5 < e20_5 < e50_5
+                    m5_trend_bullish = c5 > e20_5 > e50_5
+                    if m5_trend_bearish and momentum.get("direction") == "BUY":
+                        momentum["direction"] = "NEUTRAL"
+                        momentum["trend_override"] = "M5_TREND_DOWN_BLOCK_BUY"
+                    elif m5_trend_bullish and momentum.get("direction") == "SELL":
+                        momentum["direction"] = "NEUTRAL"
+                        momentum["trend_override"] = "M5_TREND_UP_BLOCK_SELL"
+
         except Exception:
             pass
 
