@@ -5,6 +5,9 @@ from app.mt5.order_builder import OrderBuilder
 from app.mt5.order_sender import OrderSender
 from app.mt5.pending_order_manager import PendingOrderManager
 
+# Counter untuk entry mix (2 → 1 → 2 → 1 → ...)
+_entry_counter = 0
+
 
 class AutoTrader:
 
@@ -18,10 +21,18 @@ class AutoTrader:
         self.pending_manager = PendingOrderManager(dry_run=dry_run)
 
     def _entry_copies(self):
+        global _entry_counter
         try:
             import json
             with open("runtime/trade_config.json") as f:
-                return max(1, int(json.load(f).get("entry_copies", 1)))
+                cfg = json.load(f)
+            mode = cfg.get("entry_copies_mode", "mixed")
+            if mode == "mixed":
+                # 2 → 1 → 2 → 1 → ...
+                _entry_counter += 1
+                return 2 if _entry_counter % 2 == 1 else 1
+            else:
+                return max(1, int(cfg.get("entry_copies", 1)))
         except Exception:
             return 1
 
