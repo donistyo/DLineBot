@@ -3114,6 +3114,74 @@ function rebuildTVChart() {
   initTVChart(sym, {});
 }
 
+// Draw position lines (Entry, SL, TP) on TradingView chart
+let tvPositionLines = [];
+function drawTVPositionLines(positions) {
+  if (!tvWidget || !tvWidget.activeChart) return;
+  try {
+    const chart = tvWidget.activeChart();
+    // Remove old lines
+    tvPositionLines.forEach(id => {
+      try { chart.removeEntity(id); } catch(e) {}
+    });
+    tvPositionLines = [];
+    if (!positions || !positions.length) return;
+    const p = positions[0];
+    const isBuy = p.type === 'BUY';
+    const entry = parseFloat(p.open_price);
+    const sl = p.sl ? parseFloat(p.sl) : null;
+    const tp = p.tp ? parseFloat(p.tp) : null;
+    // Entry line
+    const entryLine = chart.createShapeLine({
+      points: [{ price: entry }],
+      lock: true,
+      disableSelection: true,
+      disableSave: true,
+      disableUndo: true,
+    }, { shape: 'horizontal_line', lock: true });
+    if (entryLine) {
+      tvPositionLines.push(entryLine);
+      entryLine.setLineColor(isBuy ? '#6ee7b7' : '#fca5a5');
+      entryLine.setLineWidth(2);
+      entryLine.setLineStyle(2); // dashed
+    }
+    // SL line
+    if (sl) {
+      const slLine = chart.createShapeLine({
+        points: [{ price: sl }],
+        lock: true, disableSelection: true, disableSave: true, disableUndo: true,
+      }, { shape: 'horizontal_line', lock: true });
+      if (slLine) {
+        tvPositionLines.push(slLine);
+        slLine.setLineColor('#ef4444');
+        slLine.setLineWidth(1);
+        slLine.setLineStyle(1); // dotted
+      }
+    }
+    // TP line
+    if (tp) {
+      const tpLine = chart.createShapeLine({
+        points: [{ price: tp }],
+        lock: true, disableSelection: true, disableSave: true, disableUndo: true,
+      }, { shape: 'horizontal_line', lock: true });
+      if (tpLine) {
+        tvPositionLines.push(tpLine);
+        tpLine.setLineColor('#22c55e');
+        tpLine.setLineWidth(1);
+        tpLine.setLineStyle(1); // dotted
+      }
+    }
+  } catch(e) { console.error('TV position lines:', e); }
+}
+
+// Redraw position lines every 10 seconds
+setInterval(() => {
+  const mon = window._tvMonData;
+  if (mon && mon.positions && mon.positions.length) {
+    drawTVPositionLines(mon.positions);
+  }
+}, 10000);
+
 // Tidak ada dropdown tema/style; seluruhnya paten ke tema dashboard (navy)
 function syncTVControls() {
   const sym = document.getElementById('tvSymbolTitle').textContent || 'XAUUSDc';
@@ -3124,8 +3192,8 @@ function tvMapSymbol(symbol) {
   const s = String(symbol || '').toUpperCase();
   if (s.includes('BTC')) return 'BINANCE:BTCUSDT';
   if (s.includes('ETH')) return 'BINANCE:ETHUSDT';
-  if (s.includes('XAU')) return 'OANDA:XAUUSD';
-  if (s.includes('XAG')) return 'OANDA:XAGUSD';
+  if (s.includes('XAU')) return 'FX:XAUUSD';
+  if (s.includes('XAG')) return 'FX:XAGUSD';
   return s.replace(/c$/i, '');
 }
 
@@ -3178,9 +3246,15 @@ async function fetchTVMonitor() {
   }
 
   renderTVSignal(scalp.scalp_score || {}, mtf.tfs || {});
+  // Store mon data globally for position lines
+  window._tvMonData = mon;
   renderTVPosition(mon.positions || [], mon.tick || {});
   renderTVRisk(mon, st);
   renderTvChecklist(ck);
+  // Draw position lines on chart if positions exist
+  if (mon.positions && mon.positions.length) {
+    setTimeout(() => drawTVPositionLines(mon.positions), 2000);
+  }
 }
 
 function renderTvChecklist(ck) {
@@ -3303,6 +3377,11 @@ function renderTVPosition(positions, tick) {
     '<div class="tv-pos-row"><span class="k">Take Profit</span><span class="v">' + (p.tp || '-') + '</span></div>' +
     '<div class="tv-pos-row"><span class="k">Waktu</span><span class="v">' + (p.open_time || '-') + '</span></div>' +
     '<div class="tv-pnl"><span class="pnl-lbl">Floating PnL</span><span class="pnl-val" style="color:' + pnlColor + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</span></div>' +
+    '<div style="margin-top:8px;font-size:10px;color:#94a3b8;border-top:1px solid #1e293b;padding-top:6px">' +
+    '<span style="color:' + (isBuy ? '#6ee7b7' : '#fca5a5') + '">---</span> Entry ' +
+    '<span style="color:#ef4444">---</span> SL ' +
+    '<span style="color:#22c55e">---</span> TP ' +
+    '<span style="color:#64748b">(di chart)</span></div>' +
     '<div style="margin-top:10px"><button onclick="closeTVPosition(' + p.ticket + ')" style="width:100%;padding:6px 0;background:#dc2626;color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600">Close Posisi</button></div>';
 }
 
