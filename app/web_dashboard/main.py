@@ -639,6 +639,17 @@ def api_chart_candles():
             fe.write(f"{datetime.now()} {e}\n{traceback.format_exc()}\n")
     return {"candles": candles, "count": len(candles), "symbol": _active_symbol()}
 
+@app.get("/api/tick")
+def api_tick():
+    try:
+        MT5Session.connect()
+        tick = mt5.symbol_info_tick(_active_symbol())
+        if tick:
+            return {"tick": {"bid": tick.bid, "ask": tick.ask, "time": tick.time}}
+    except Exception:
+        pass
+    return {"tick": {}}
+
 # =====================================
 # Intraday API
 # =====================================
@@ -1446,6 +1457,7 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 .tv-pill.on .dot { background:#6ee7b7; box-shadow:0 0 8px #6ee7b7; }
 .tv-pill.off { background:rgba(252,165,165,0.08); border:1px solid rgba(252,165,165,0.3); color:#fca5a5; }
 .tv-pill.off .dot { background:#fca5a5; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
 </style>
 </head>
 <body>
@@ -1800,6 +1812,10 @@ tr:hover td { background:rgba(59,130,246,0.05); }
     <div class="tv-signal-head">
       <span class="lbl">Chart — <span id="tvSymbolTitle">XAUUSDc</span></span>
       <span class="lbl" style="color:#60a5fa">TradingView</span>
+      <span style="margin-left:auto;font-size:10px;color:#fbbf24;display:flex;align-items:center;gap:4px">
+        <span style="width:6px;height:6px;border-radius:50%;background:#fbbf24;display:inline-block;animation:blink 1s infinite"></span>
+        LIVE MT5 <span id="tvLiveTs" style="color:#94a3b8">—</span>
+      </span>
     </div>
     <div id="tv_chart" style="min-height:520px;border-radius:8px;overflow:hidden"></div>
   </div>
@@ -3173,6 +3189,47 @@ function drawTVPositionLines(positions) {
     }
   } catch(e) { console.error('TV position lines:', e); }
 }
+
+// Real-time MT5 price line on TradingView chart
+let tvLivePriceLine = null;
+let tvLivePriceLabel = null;
+function updateTVLivePrice(tick) {
+  if (!tvWidget || !tvWidget.activeChart || !tick) return;
+  try {
+    const chart = tvWidget.activeChart();
+    const price = tick.bid || tick.ask;
+    if (!price) return;
+    // Remove old line
+    if (tvLivePriceLine) {
+      try { chart.removeEntity(tvLivePriceLine); } catch(e) {}
+      tvLivePriceLine = null;
+    }
+    // Create new price line
+    tvLivePriceLine = chart.createShapeLine({
+      points: [{ price: price }],
+      lock: true, disableSelection: true, disableSave: true, disableUndo: true,
+    }, { shape: 'horizontal_line', lock: true });
+    if (tvLivePriceLine) {
+      tvLivePriceLine.setLineColor('#fbbf24');
+      tvLivePriceLine.setLineWidth(2);
+      tvLivePriceLine.setLineStyle(0); // solid
+    }
+  } catch(e) {}
+}
+
+// Fetch live price from MT5 every 2 seconds and update chart
+setInterval(async () => {
+  try {
+    const res = await fetch('/api/tick');
+    const data = await res.json();
+    if (data && data.tick) {
+      updateTVLivePrice(data.tick);
+      // Update timestamp
+      const ts = document.getElementById('tvLiveTs');
+      if (ts) ts.textContent = new Date().toLocaleTimeString('id-ID');
+    }
+  } catch(e) {}
+}, 2000);
 
 // Redraw position lines every 10 seconds
 setInterval(() => {
