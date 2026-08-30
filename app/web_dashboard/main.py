@@ -3130,7 +3130,7 @@ function rebuildTVChart() {
   initTVChart(sym, {});
 }
 
-// Draw position lines (Entry, SL, TP) on TradingView chart
+// Draw position lines (Entry, SL, TP) on TradingView chart - supports multiple positions
 let tvPositionLines = [];
 function drawTVPositionLines(positions) {
   if (!tvWidget || !tvWidget.activeChart) return;
@@ -3142,51 +3142,52 @@ function drawTVPositionLines(positions) {
     });
     tvPositionLines = [];
     if (!positions || !positions.length) return;
-    const p = positions[0];
-    const isBuy = p.type === 'BUY';
-    const entry = parseFloat(p.open_price);
-    const sl = p.sl ? parseFloat(p.sl) : null;
-    const tp = p.tp ? parseFloat(p.tp) : null;
-    // Entry line
-    const entryLine = chart.createShapeLine({
-      points: [{ price: entry }],
-      lock: true,
-      disableSelection: true,
-      disableSave: true,
-      disableUndo: true,
-    }, { shape: 'horizontal_line', lock: true });
-    if (entryLine) {
-      tvPositionLines.push(entryLine);
-      entryLine.setLineColor(isBuy ? '#6ee7b7' : '#fca5a5');
-      entryLine.setLineWidth(2);
-      entryLine.setLineStyle(2); // dashed
-    }
-    // SL line
-    if (sl) {
-      const slLine = chart.createShapeLine({
-        points: [{ price: sl }],
+    const COLORS = ['#60a5fa', '#a78bfa']; // blue, purple for multi positions
+    positions.forEach((p, idx) => {
+      const isBuy = p.type === 'BUY';
+      const entry = parseFloat(p.open_price);
+      const sl = p.sl ? parseFloat(p.sl) : null;
+      const tp = p.tp ? parseFloat(p.tp) : null;
+      const color = COLORS[idx % COLORS.length];
+      const prefix = positions.length > 1 ? '#' + (idx+1) + ' ' : '';
+      // Entry line
+      const entryLine = chart.createShapeLine({
+        points: [{ price: entry }],
         lock: true, disableSelection: true, disableSave: true, disableUndo: true,
       }, { shape: 'horizontal_line', lock: true });
-      if (slLine) {
-        tvPositionLines.push(slLine);
-        slLine.setLineColor('#ef4444');
-        slLine.setLineWidth(1);
-        slLine.setLineStyle(1); // dotted
+      if (entryLine) {
+        tvPositionLines.push(entryLine);
+        entryLine.setLineColor(color);
+        entryLine.setLineWidth(2);
+        entryLine.setLineStyle(2); // dashed
       }
-    }
-    // TP line
-    if (tp) {
-      const tpLine = chart.createShapeLine({
-        points: [{ price: tp }],
-        lock: true, disableSelection: true, disableSave: true, disableUndo: true,
-      }, { shape: 'horizontal_line', lock: true });
-      if (tpLine) {
-        tvPositionLines.push(tpLine);
-        tpLine.setLineColor('#22c55e');
-        tpLine.setLineWidth(1);
-        tpLine.setLineStyle(1); // dotted
+      // SL line
+      if (sl) {
+        const slLine = chart.createShapeLine({
+          points: [{ price: sl }],
+          lock: true, disableSelection: true, disableSave: true, disableUndo: true,
+        }, { shape: 'horizontal_line', lock: true });
+        if (slLine) {
+          tvPositionLines.push(slLine);
+          slLine.setLineColor('#ef4444');
+          slLine.setLineWidth(1);
+          slLine.setLineStyle(1); // dotted
+        }
       }
-    }
+      // TP line
+      if (tp) {
+        const tpLine = chart.createShapeLine({
+          points: [{ price: tp }],
+          lock: true, disableSelection: true, disableSave: true, disableUndo: true,
+        }, { shape: 'horizontal_line', lock: true });
+        if (tpLine) {
+          tvPositionLines.push(tpLine);
+          tpLine.setLineColor('#22c55e');
+          tpLine.setLineWidth(1);
+          tpLine.setLineStyle(1); // dotted
+        }
+      }
+    });
   } catch(e) { console.error('TV position lines:', e); }
 }
 
@@ -3416,30 +3417,44 @@ function renderTVPosition(positions, tick) {
     body.innerHTML = '<div style="font-size:12px;color:#64748b;padding:8px 0">Tidak ada posisi terbuka.</div>';
     return;
   }
-  const p = positions[0];
-  tag.textContent = '#' + p.ticket;
+  tag.textContent = positions.length + ' POSISI';
   tag.style.color = '#60a5fa';
-  const isBuy = p.type === 'BUY';
-  const pnl = p.profit || 0;
-  const pnlColor = pnl >= 0 ? '#6ee7b7' : '#fca5a5';
-  const pct = p.volume * 100;
-  const live = (isBuy ? (tick && tick.bid) : (tick && tick.ask)) || p.current;
-  const liveColor = isBuy ? '#6ee7b7' : '#fca5a5';
-  body.innerHTML =
-    '<div class="tv-pos-row"><span class="k">Arah</span><span class="v" style="color:' + (isBuy ? '#6ee7b7' : '#fca5a5') + '">' + (isBuy ? 'BUY' : 'SELL') + ' ' + pct.toFixed(2).replace('.00','') + ' lot</span></div>' +
-    '<div class="tv-pos-row"><span class="k">Entry</span><span class="v">' + p.open_price + '</span></div>' +
-    '<div class="tv-pos-row"><span class="k">Live ' + (isBuy ? 'Bid' : 'Ask') + '</span><span class="v" style="color:' + liveColor + '">' + live + '</span></div>' +
-    '<div class="tv-pos-row"><span class="k">Jarak Entry</span><span class="v">' + (p.dist !== undefined && p.dist !== null ? (p.dist >= 0 ? '+' : '') + p.dist : '-') + '</span></div>' +
-    '<div class="tv-pos-row"><span class="k">Stop Loss</span><span class="v">' + (p.sl || '-') + '</span></div>' +
-    '<div class="tv-pos-row"><span class="k">Take Profit</span><span class="v">' + (p.tp || '-') + '</span></div>' +
-    '<div class="tv-pos-row"><span class="k">Waktu</span><span class="v">' + (p.open_time || '-') + '</span></div>' +
-    '<div class="tv-pnl"><span class="pnl-lbl">Floating PnL</span><span class="pnl-val" style="color:' + pnlColor + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</span></div>' +
-    '<div style="margin-top:8px;font-size:10px;color:#94a3b8;border-top:1px solid #1e293b;padding-top:6px">' +
-    '<span style="color:' + (isBuy ? '#6ee7b7' : '#fca5a5') + '">---</span> Entry ' +
+  const COLORS = ['#60a5fa', '#a78bfa'];
+  let html = '';
+  let totalPnl = 0;
+  positions.forEach((p, idx) => {
+    const isBuy = p.type === 'BUY';
+    const pnl = p.profit || 0;
+    totalPnl += pnl;
+    const pnlColor = pnl >= 0 ? '#6ee7b7' : '#fca5a5';
+    const pct = p.volume * 100;
+    const live = (isBuy ? (tick && tick.bid) : (tick && tick.ask)) || p.current;
+    const liveColor = isBuy ? '#6ee7b7' : '#fca5a5';
+    const borderColor = COLORS[idx % COLORS.length];
+    html += '<div style="border-left:3px solid ' + borderColor + ';padding-left:8px;margin-bottom:' + (idx < positions.length-1 ? '12px' : '0') + '">' +
+      '<div style="font-size:11px;color:' + borderColor + ';font-weight:600;margin-bottom:4px">#' + (idx+1) + ' ' + p.ticket + ' &mdash; ' + (isBuy ? 'BUY' : 'SELL') + ' ' + pct.toFixed(2).replace('.00','') + ' lot</div>' +
+      '<div class="tv-pos-row"><span class="k">Entry</span><span class="v">' + p.open_price + '</span></div>' +
+      '<div class="tv-pos-row"><span class="k">Live ' + (isBuy ? 'Bid' : 'Ask') + '</span><span class="v" style="color:' + liveColor + '">' + live + '</span></div>' +
+      '<div class="tv-pos-row"><span class="k">Jarak</span><span class="v">' + (p.dist !== undefined && p.dist !== null ? (p.dist >= 0 ? '+' : '') + p.dist : '-') + '</span></div>' +
+      '<div class="tv-pos-row"><span class="k">SL</span><span class="v">' + (p.sl || '-') + '</span></div>' +
+      '<div class="tv-pos-row"><span class="k">TP</span><span class="v">' + (p.tp || '-') + '</span></div>' +
+      '<div class="tv-pos-row"><span class="k">Waktu</span><span class="v">' + (p.open_time || '-') + '</span></div>' +
+      '<div class="tv-pnl"><span class="pnl-lbl">PnL</span><span class="pnl-val" style="color:' + pnlColor + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</span></div>' +
+      '<div style="margin-top:6px"><button onclick="closeTVPosition(' + p.ticket + ')" style="width:100%;padding:5px 0;background:#dc2626;color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:11px;font-weight:600">Close #' + p.ticket + '</button></div>' +
+      '</div>';
+  });
+  // Total PnL
+  const totalColor = totalPnl >= 0 ? '#6ee7b7' : '#fca5a5';
+  html = '<div style="padding:6px 8px;margin-bottom:8px;background:rgba(99,102,241,0.1);border-radius:6px;font-size:12px">' +
+    '<span style="color:#94a3b8">Total PnL: </span><span style="color:' + totalColor + ';font-weight:700">' + (totalPnl >= 0 ? '+' : '') + '$' + totalPnl.toFixed(2) + '</span>' +
+    '</div>' + html;
+  // Legend
+  html += '<div style="margin-top:8px;font-size:10px;color:#94a3b8;border-top:1px solid #1e293b;padding-top:6px">' +
+    '<span style="color:#60a5fa">---</span> #1 Entry ' +
+    (positions.length > 1 ? '<span style="color:#a78bfa">---</span> #2 Entry ' : '') +
     '<span style="color:#ef4444">---</span> SL ' +
-    '<span style="color:#22c55e">---</span> TP ' +
-    '<span style="color:#64748b">(di chart)</span></div>' +
-    '<div style="margin-top:10px"><button onclick="closeTVPosition(' + p.ticket + ')" style="width:100%;padding:6px 0;background:#dc2626;color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600">Close Posisi</button></div>';
+    '<span style="color:#22c55e">---</span> TP</div>';
+  body.innerHTML = html;
 }
 
 function renderTVRisk(mon, st) {
