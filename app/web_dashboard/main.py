@@ -650,6 +650,17 @@ def api_tick():
         pass
     return {"tick": {}}
 
+@app.get("/api/signals")
+def api_signals():
+    """Ambil history signal untuk ditampilkan di chart."""
+    try:
+        with open("runtime/signal_history.json") as f:
+            signals = json.load(f)
+    except Exception:
+        signals = []
+    # Ambil max 20 signal terakhir (untuk chart)
+    return {"signals": signals[-20:]}
+
 # =====================================
 # Intraday API
 # =====================================
@@ -1818,6 +1829,15 @@ tr:hover td { background:rgba(59,130,246,0.05); }
       </span>
     </div>
     <div id="tv_chart" style="min-height:520px;border-radius:8px;overflow:hidden"></div>
+    <div style="padding:6px 10px;font-size:10px;color:#94a3b8;background:rgba(15,23,42,0.5);border-radius:0 0 8px 8px;display:flex;gap:12px;flex-wrap:wrap">
+      <span><span style="color:#fbbf24">---</span> Live MT5</span>
+      <span><span style="color:#60a5fa">---</span> #1 Entry</span>
+      <span><span style="color:#a78bfa">---</span> #2 Entry</span>
+      <span><span style="color:#ef4444">---</span> SL</span>
+      <span><span style="color:#22c55e">---</span> TP</span>
+      <span><span style="color:#22c55e">- - -</span> Signal BUY</span>
+      <span><span style="color:#ef4444">- - -</span> Signal SELL</span>
+    </div>
   </div>
 
   <div class="tv-check">
@@ -3231,6 +3251,48 @@ setInterval(async () => {
     }
   } catch(e) {}
 }, 2000);
+
+// Signal markers on TradingView chart (Buy/Sell labels)
+let tvSignalMarkers = [];
+function drawTVSignalMarkers(signals) {
+  if (!tvWidget || !tvWidget.activeChart) return;
+  try {
+    const chart = tvWidget.activeChart();
+    // Remove old markers
+    tvSignalMarkers.forEach(id => {
+      try { chart.removeEntity(id); } catch(e) {}
+    });
+    tvSignalMarkers = [];
+    if (!signals || !signals.length) return;
+    signals.forEach(s => {
+      const isBuy = s.signal === 'BUY';
+      const price = s.price;
+      if (!price) return;
+      // Entry line
+      const line = chart.createShapeLine({
+        points: [{ price: price }],
+        lock: true, disableSelection: true, disableSave: true, disableUndo: true,
+      }, { shape: 'horizontal_line', lock: true });
+      if (line) {
+        tvSignalMarkers.push(line);
+        line.setLineColor(isBuy ? '#22c55e' : '#ef4444');
+        line.setLineWidth(1);
+        line.setLineStyle(2); // dashed
+      }
+    });
+  } catch(e) { console.error('TV signal markers:', e); }
+}
+
+// Fetch signal history every 10 seconds
+setInterval(async () => {
+  try {
+    const res = await fetch('/api/signals');
+    const data = await res.json();
+    if (data && data.signals) {
+      drawTVSignalMarkers(data.signals);
+    }
+  } catch(e) {}
+}, 10000);
 
 // Redraw position lines every 10 seconds
 setInterval(() => {

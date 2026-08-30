@@ -4,9 +4,39 @@ from app.mt5.position_manager import PositionManager
 from app.mt5.order_builder import OrderBuilder
 from app.mt5.order_sender import OrderSender
 from app.mt5.pending_order_manager import PendingOrderManager
+import json
+import os
+from datetime import datetime
 
 # Counter untuk entry mix (2 → 1 → 2 → 1 → ...)
 _entry_counter = 0
+
+SIGNAL_HISTORY_PATH = "runtime/signal_history.json"
+
+def _save_signal_history(signal, price, sl, tp, score=0, grade="-"):
+    """Simpan history signal ke file untuk ditampilkan di chart."""
+    try:
+        history = []
+        if os.path.exists(SIGNAL_HISTORY_PATH):
+            with open(SIGNAL_HISTORY_PATH) as f:
+                history = json.load(f)
+        entry = {
+            "signal": signal,
+            "price": round(price, 5),
+            "sl": round(sl, 5) if sl else None,
+            "tp": round(tp, 5) if tp else None,
+            "score": score,
+            "grade": grade,
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": int(datetime.now().timestamp()),
+        }
+        history.append(entry)
+        # Simpan max 50 signal terakhir
+        history = history[-50:]
+        with open(SIGNAL_HISTORY_PATH, "w") as f:
+            json.dump(history, f, indent=2)
+    except Exception:
+        pass
 
 
 class AutoTrader:
@@ -122,6 +152,16 @@ class AutoTrader:
             })
 
         all_success = all(r["success"] for r in results)
+        # Simpan signal history jika order berhasil
+        if all_success:
+            _save_signal_history(
+                signal=signal,
+                price=risk.get("entry_price", 0),
+                sl=risk.get("stop_loss"),
+                tp=risk.get("take_profit"),
+                score=risk.get("score", 0),
+                grade=risk.get("grade", "-"),
+            )
         return {
 
             "status": "SUCCESS" if all_success else "FAILED",
