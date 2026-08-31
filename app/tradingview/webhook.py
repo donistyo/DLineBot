@@ -267,17 +267,22 @@ def tv_multi_tf():
                 results[tf] = {"trend": "NA", "adx": 0, "close": 0, "ema20": 0, "ema50": 0}
                 continue
             last = df.iloc[-1]
+            from app.trading.regime_logic import classify_regime
             adx = float(last["ADX"]) if pd.notna(last["ADX"]) else 0
-            if adx < 20:
-                trend = "SIDEWAYS"
-            elif last["close"] > last["EMA20"] > last["EMA50"]:
-                trend = "UP"
-            elif last["close"] < last["EMA20"] < last["EMA50"]:
-                trend = "DOWN"
+            regime = classify_regime(
+                close=float(last["close"]),
+                ema20=float(last["EMA20"]),
+                ema50=float(last["EMA50"]),
+                adx=adx,
+            )
+            # Trend field untuk backward compat: UP/DOWN/SIDEWAYS
+            if regime.trend:
+                trend = regime.trend  # "UP" atau "DOWN"
             else:
                 trend = "SIDEWAYS"
             results[tf] = {
                 "trend": trend,
+                "mode": regime.mode,  # SIDEWAYS/WEAK/TREND
                 "adx": round(adx, 1),
                 "close": round(float(last["close"]), 2),
                 "ema20": round(float(last["EMA20"]), 2),

@@ -3445,8 +3445,17 @@ function renderTVSignal(ss, tfs) {
   for (const tf of tfKeys) {
     const t = (tfs || {})[tf] || {};
     const trend = String(t.trend || 'NA').toUpperCase();
+    const mode = String(t.mode || '').toUpperCase();
+    // State untuk warna/strength
     const state = trend === 'UP' ? 'up' : trend === 'DOWN' ? 'down' : 'side';
-    const label = trend === 'UP' ? 'BUY' : trend === 'DOWN' ? 'SELL' : 'SIDE';
+    // Label: tampilkan mode (TREND/WEAK) + arah
+    let label = 'SIDE';
+    if (trend === 'UP' || trend === 'DOWN') {
+      const dirLabel = trend === 'UP' ? 'BUY' : 'SELL';
+      if (mode === 'TREND') label = dirLabel;
+      else if (mode === 'WEAK') label = 'W/' + dirLabel;
+      else label = dirLabel;
+    }
     const strength = (trend === 'UP' || trend === 'DOWN') ? 38 : 0;
     if (trend !== 'NA') { total++; if (trend === 'UP' || trend === 'DOWN') aligned++; }
     rows.push(
