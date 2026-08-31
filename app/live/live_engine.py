@@ -840,6 +840,29 @@ class LiveEngine:
 
             scalp_dir = (scalp_result or {}).get("scalp_score", {}).get("direction", "NEUTRAL")
             tf_signal = scalp_dir if scalp_dir in ("BUY", "SELL") else None
+
+            # ====================================================
+            # TF SIGNAL INFERENCE: Jika scalp NEUTRAL tapi M5+M15
+            # keduanya TREND searah, pakai arah dari higher TF
+            # ====================================================
+            if tf_signal is None:
+                try:
+                    _m5_check = self.smart_scalping._get_ema_adx(mt5.TIMEFRAME_M5)
+                    _m15_check = self.smart_scalping._get_ema_adx(mt5.TIMEFRAME_M15)
+                    if _m5_check and _m15_check:
+                        _c5, _e20_5, _e50_5, _adx5 = _m5_check
+                        _c15, _e20_15, _e50_15, _adx15 = _m15_check
+                        _m5_down = _adx5 >= 25 and _c5 < _e20_5 < _e50_5
+                        _m5_up = _adx5 >= 25 and _c5 > _e20_5 > _e50_5
+                        _m15_down = _adx15 >= 25 and _c15 < _e20_15 < _e50_15
+                        _m15_up = _adx15 >= 25 and _c15 > _e20_15 > _e50_15
+                        if _m5_down and _m15_down:
+                            tf_signal = "SELL"
+                        elif _m5_up and _m15_up:
+                            tf_signal = "BUY"
+                except Exception:
+                    pass
+
             tf_confirmation = self.multi_tf.confirm(
                 prediction, last, signal=tf_signal
             )
@@ -871,6 +894,13 @@ class LiveEngine:
             # =====================================
             # Decision
             # =====================================
+
+            # Update scalp_result dengan inferred direction dari higher TF
+            if tf_signal and scalp_dir == "NEUTRAL":
+                scalp_result = dict(scalp_result)
+                scalp_result["scalp_score"] = dict(scalp_result.get("scalp_score", {}))
+                scalp_result["scalp_score"]["direction"] = tf_signal
+                scalp_result["scalp_score"]["_inferred_from"] = "M5+M15_TREND"
 
             decision = self.decide(
                 prediction,
