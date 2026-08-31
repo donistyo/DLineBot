@@ -3150,26 +3150,49 @@ function rebuildTVChart() {
   initTVChart(sym, {});
 }
 
-// Draw position lines (Entry, SL, TP) on TradingView chart - supports multiple positions
+// Draw position lines (Entry, SL, TP) + BUY/SELL markers on TradingView chart
 let tvPositionLines = [];
+let tvPositionMarkers = [];
 function drawTVPositionLines(positions) {
   if (!tvWidget || !tvWidget.activeChart) return;
   try {
     const chart = tvWidget.activeChart();
-    // Remove old lines
+    // Remove old lines and markers
     tvPositionLines.forEach(id => {
       try { chart.removeEntity(id); } catch(e) {}
     });
+    tvPositionMarkers.forEach(id => {
+      try { chart.removeEntity(id); } catch(e) {}
+    });
     tvPositionLines = [];
+    tvPositionMarkers = [];
     if (!positions || !positions.length) return;
-    const COLORS = ['#60a5fa', '#a78bfa']; // blue, purple for multi positions
+    const COLORS = ['#60a5fa', '#a78bfa'];
     positions.forEach((p, idx) => {
       const isBuy = p.type === 'BUY';
       const entry = parseFloat(p.open_price);
       const sl = p.sl ? parseFloat(p.sl) : null;
       const tp = p.tp ? parseFloat(p.tp) : null;
       const color = COLORS[idx % COLORS.length];
-      const prefix = positions.length > 1 ? '#' + (idx+1) + ' ' : '';
+
+      // BUY/SELL marker label at entry price
+      try {
+        const markerColor = isBuy ? '#22c55e' : '#ef4444';
+        const markerText = (isBuy ? '▲ BUY ' : '▼ SELL ') + '#' + p.ticket;
+        const marker = chart.createShapeText({
+          points: [{ price: entry }],
+          text: markerText,
+          color: markerColor,
+          fontSize: 12,
+          bold: true,
+          lock: true, disableSelection: true, disableSave: true, disableUndo: true,
+          fixedSize: false,
+        });
+        if (marker) {
+          tvPositionMarkers.push(marker);
+        }
+      } catch(e) {}
+
       // Entry line
       const entryLine = chart.createShapeLine({
         points: [{ price: entry }],
