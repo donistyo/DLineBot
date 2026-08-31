@@ -843,23 +843,22 @@ class LiveEngine:
 
             # ====================================================
             # TF SIGNAL INFERENCE: Jika scalp NEUTRAL tapi M5+M15
-            # keduanya TREND searah, pakai arah dari higher TF
+            # keduanya searah (TREND/WEAK), pakai arah dari higher TF
+            # Pakai classify_regime() untuk konsistensi
             # ====================================================
             if tf_signal is None:
                 try:
+                    from app.trading.regime_logic import classify_regime
                     _m5_check = self.smart_scalping._get_ema_adx(mt5.TIMEFRAME_M5)
                     _m15_check = self.smart_scalping._get_ema_adx(mt5.TIMEFRAME_M15)
                     if _m5_check and _m15_check:
                         _c5, _e20_5, _e50_5, _adx5 = _m5_check
                         _c15, _e20_15, _e50_15, _adx15 = _m15_check
-                        _m5_down = _adx5 >= 25 and _c5 < _e20_5 < _e50_5
-                        _m5_up = _adx5 >= 25 and _c5 > _e20_5 > _e50_5
-                        _m15_down = _adx15 >= 25 and _c15 < _e20_15 < _e50_15
-                        _m15_up = _adx15 >= 25 and _c15 > _e20_15 > _e50_15
-                        if _m5_down and _m15_down:
-                            tf_signal = "SELL"
-                        elif _m5_up and _m15_up:
-                            tf_signal = "BUY"
+                        _r5 = classify_regime(_c5, _e20_5, _e50_5, _adx5)
+                        _r15 = classify_regime(_c15, _e20_15, _e50_15, _adx15)
+                        # Keduanya harus punya arah yang sama
+                        if _r5.trend and _r15.trend and _r5.trend == _r15.trend:
+                            tf_signal = "SELL" if _r5.trend == "DOWN" else "BUY"
                 except Exception:
                     pass
 
