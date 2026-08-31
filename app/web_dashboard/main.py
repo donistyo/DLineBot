@@ -1828,7 +1828,7 @@ tr:hover td { background:rgba(59,130,246,0.05); }
         LIVE MT5 <span id="tvLiveTs" style="color:#94a3b8">—</span>
       </span>
     </div>
-    <div id="tv_chart" style="min-height:520px;border-radius:8px;overflow:hidden"></div>
+    <div id="tv_chart" style="min-height:520px;border-radius:8px;overflow:visible;position:relative"></div>
     <div style="padding:6px 10px;font-size:10px;color:#94a3b8;background:rgba(15,23,42,0.5);border-radius:0 0 8px 8px;display:flex;gap:12px;flex-wrap:wrap">
       <span><span style="color:#fbbf24">---</span> Live MT5</span>
       <span><span style="color:#60a5fa">---</span> #1 Entry</span>
@@ -3130,6 +3130,7 @@ function initTVChart(symbol, opts) {
   const el = document.getElementById('tv_chart');
   if (!el) return;
   el.innerHTML = '';
+  clearTVPositionLabels();
   if (!window.TradingView) {
     const s = document.createElement('script');
     s.src = 'https://s3.tradingview.com/tv.js';
@@ -3152,20 +3153,68 @@ function rebuildTVChart() {
 
 // Draw position lines (Entry, SL, TP) + BUY/SELL markers on TradingView chart
 let tvPositionLines = [];
-let tvPositionMarkers = [];
+let tvPositionLabels = [];
+
+function clearTVPositionLabels() {
+  tvPositionLabels.forEach(el => { try { el.remove(); } catch(e) {} });
+  tvPositionLabels = [];
+}
+
+function updateTVPositionLabels(positions) {
+  if (!tvWidget || !tvWidget.activeChart) return;
+  clearTVPositionLabels();
+  if (!positions || !positions.length) return;
+  try {
+    const chart = tvWidget.activeChart();
+    const chartEl = document.getElementById('tv_chart');
+    if (!chartEl) return;
+    const rect = chartEl.getBoundingClientRect();
+    const COLORS = ['#60a5fa', '#a78bfa'];
+    positions.forEach((p, idx) => {
+      const isBuy = p.type === 'BUY';
+      const entry = parseFloat(p.open_price);
+      const color = COLORS[idx % COLORS.length];
+      const markerColor = isBuy ? '#22c55e' : '#ef4444';
+      const arrow = isBuy ? '▲' : '▼';
+      const label = arrow + ' ' + p.type + ' #' + p.ticket;
+      const pnl = p.profit || 0;
+      const pnlStr = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+
+      // Create HTML overlay label
+      const el = document.createElement('div');
+      el.style.cssText = 'position:absolute;left:0;pointer-events:none;z-index:10;font-size:11px;font-weight:700;white-space:nowrap;display:flex;align-items:center;gap:6px';
+      el.innerHTML = '<span style="background:' + markerColor + ';color:#fff;padding:2px 6px;border-radius:3px">' + label + '</span>' +
+        '<span style="color:' + (pnl >= 0 ? '#6ee7b7' : '#fca5a5') + ';font-size:10px">' + pnlStr + '</span>';
+      chartEl.appendChild(el);
+      tvPositionLabels.push(el);
+
+      // Position via priceToCoordinate
+      const tryPosition = () => {
+        try {
+          const y = chart.priceToCoordinate(entry);
+          if (y !== null && y !== undefined && y >= 0 && y <= rect.height) {
+            el.style.top = y - 10 + 'px';
+            el.style.display = 'flex';
+          } else {
+            el.style.display = 'none';
+          }
+        } catch(e) { el.style.display = 'none'; }
+      };
+      tryPosition();
+      // Reposition on scroll/zoom
+      chart.onVisibleRangeChanged(() => { setTimeout(tryPosition, 50); });
+    });
+  } catch(e) { console.error('TV position labels:', e); }
+}
+
 function drawTVPositionLines(positions) {
   if (!tvWidget || !tvWidget.activeChart) return;
   try {
     const chart = tvWidget.activeChart();
-    // Remove old lines and markers
     tvPositionLines.forEach(id => {
       try { chart.removeEntity(id); } catch(e) {}
     });
-    tvPositionMarkers.forEach(id => {
-      try { chart.removeEntity(id); } catch(e) {}
-    });
     tvPositionLines = [];
-    tvPositionMarkers = [];
     if (!positions || !positions.length) return;
     const COLORS = ['#60a5fa', '#a78bfa'];
     positions.forEach((p, idx) => {
@@ -3174,24 +3223,6 @@ function drawTVPositionLines(positions) {
       const sl = p.sl ? parseFloat(p.sl) : null;
       const tp = p.tp ? parseFloat(p.tp) : null;
       const color = COLORS[idx % COLORS.length];
-
-      // BUY/SELL marker label at entry price
-      try {
-        const markerColor = isBuy ? '#22c55e' : '#ef4444';
-        const markerText = (isBuy ? '▲ BUY ' : '▼ SELL ') + '#' + p.ticket;
-        const marker = chart.createShapeText({
-          points: [{ price: entry }],
-          text: markerText,
-          color: markerColor,
-          fontSize: 12,
-          bold: true,
-          lock: true, disableSelection: true, disableSave: true, disableUndo: true,
-          fixedSize: false,
-        });
-        if (marker) {
-          tvPositionMarkers.push(marker);
-        }
-      } catch(e) {}
 
       // Entry line
       const entryLine = chart.createShapeLine({
@@ -3231,6 +3262,8 @@ function drawTVPositionLines(positions) {
         }
       }
     });
+    // Update HTML labels
+    updateTVPositionLabels(positions);
   } catch(e) { console.error('TV position lines:', e); }
 }
 
@@ -3317,13 +3350,16 @@ setInterval(async () => {
   } catch(e) {}
 }, 10000);
 
-// Redraw position lines every 10 seconds
+// Redraw position lines + labels every 5 seconds
 setInterval(() => {
   const mon = window._tvMonData;
   if (mon && mon.positions && mon.positions.length) {
     drawTVPositionLines(mon.positions);
+    updateTVPositionLabels(mon.positions);
+  } else {
+    clearTVPositionLabels();
   }
-}, 10000);
+}, 5000);
 
 // Tidak ada dropdown tema/style; seluruhnya paten ke tema dashboard (navy)
 function syncTVControls() {
