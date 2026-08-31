@@ -27,9 +27,16 @@ def classify_regime(close: float, ema20: float, ema50: float, adx: float) -> Reg
     Klasifikasi regime per timeframe, gabungan struktur EMA + kekuatan ADX.
     EMA menentukan ARAH, ADX menentukan KEKUATAN/TINGKAT KEPERCAYAAN.
     """
+    # Strict EMA: close > ema20 > ema50 -> UP, close < ema20 < ema50 -> DOWN
     if close > ema20 > ema50:
         ema_dir = "UP"
     elif close < ema20 < ema50:
+        ema_dir = "DOWN"
+    elif adx >= 40 and ema20 > ema50:
+        # ADX sangat kuat + EMA20 > EMA50 -> UP (pullback tapi trend masih up)
+        ema_dir = "UP"
+    elif adx >= 40 and ema20 < ema50:
+        # ADX sangat kuat + EMA20 < EMA50 -> DOWN (pullback tapi trend masih down)
         ema_dir = "DOWN"
     else:
         ema_dir = None  # EMA belum tersusun rapi -> tidak ada arah jelas
