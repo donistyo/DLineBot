@@ -98,7 +98,7 @@ def multi_tf_decision(regime_m5: Regime, regime_m15: Regime, signal_direction: s
     score_m15 = _tf_score(regime_m15, signal_direction)
     total = score_m5 + score_m15
 
-    allow = total >= 1.5
+    allow = total >= 2.0
 
     reason = (
         f"M5={regime_m5.mode}({regime_m5.trend},adx={regime_m5.adx:.1f}) "

@@ -143,6 +143,16 @@ class SmartScalpingEngine:
                         momentum["trend_override"] = "M15_HARD_BLOCK_BULLISH"
 
             # ============================================
+            # HARD BLOCK M5 ADX: M5 ADX < 20 = BLOCK semua entry
+            # M5 terlalu lemah/flat, jangan entry sampai ADX naik
+            # ============================================
+            if m5_data:
+                c5, e20_5, e50_5, adx5 = m5_data
+                if adx5 < 20 and momentum.get("direction") in ("BUY", "SELL"):
+                    momentum["direction"] = "NEUTRAL"
+                    momentum["trend_override"] = "M5_ADX_WEAK_BLOCK"
+
+            # ============================================
             # HARD BLOCK M5: M5 bearish = BLOK BUY
             # Turunkan threshold ke ADX >= 25 supaya lebih banyak
             # waktu BUY diblokir saat market turun
@@ -185,6 +195,32 @@ class SmartScalpingEngine:
                                 momentum["trend_override"] = "EXTENDED_HIGH_NO_BUY"
             except Exception:
                 pass
+
+            # ============================================
+            # M1 TREND CONFIRMATION
+            # M1 harus searah sinyal sebelum entry
+            # Cek close vs EMA20 pada M1
+            # ============================================
+            if momentum.get("direction") in ("BUY", "SELL"):
+                try:
+                    rates_m1 = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M1, 0, 30)
+                    if rates_m1 is not None and len(rates_m1) >= 20:
+                        import pandas as _pd
+                        m1_df = _pd.DataFrame(rates_m1)
+                        m1_df["close"] = m1_df["close"].astype(float)
+                        m1_ema20 = m1_df["close"].ewm(span=20).mean().iloc[-1]
+                        m1_close = float(m1_df["close"].iloc[-1])
+                        m1_dir = momentum["direction"]
+                        # BUY tapi M1 close di bawah EMA20 → sedang pullback turun
+                        if m1_dir == "BUY" and m1_close < m1_ema20:
+                            momentum["direction"] = "NEUTRAL"
+                            momentum["trend_override"] = "M1_NOT_CONFIRMED_BUY"
+                        # SELL tapi M1 close di atas EMA20 → sedang pullback naik
+                        elif m1_dir == "SELL" and m1_close > m1_ema20:
+                            momentum["direction"] = "NEUTRAL"
+                            momentum["trend_override"] = "M1_NOT_CONFIRMED_SELL"
+                except Exception:
+                    pass
 
         except Exception:
             pass
