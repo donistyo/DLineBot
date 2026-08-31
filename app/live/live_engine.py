@@ -849,8 +849,8 @@ class LiveEngine:
             if tf_signal is None:
                 try:
                     from app.trading.regime_logic import classify_regime
-                    _m5_check = self.smart_scalping._get_ema_adx(mt5.TIMEFRAME_M5)
-                    _m15_check = self.smart_scalping._get_ema_adx(mt5.TIMEFRAME_M15)
+                    _m5_check = self.smart_scalping.get_ema_adx(mt5.TIMEFRAME_M5)
+                    _m15_check = self.smart_scalping.get_ema_adx(mt5.TIMEFRAME_M15)
                     if _m5_check and _m15_check:
                         _c5, _e20_5, _e50_5, _adx5 = _m5_check
                         _c15, _e20_15, _e50_15, _adx15 = _m15_check

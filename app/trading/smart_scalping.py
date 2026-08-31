@@ -12,6 +12,33 @@ class SmartScalpingEngine:
         self.symbol = symbol
         self.direction_tf = direction_tf
 
+    def get_ema_adx(self, tf_code, bars=200):
+        """Ambil close, EMA20, EMA50, ADX dari timeframe tertentu."""
+        import MetaTrader5 as mt5
+        rates = mt5.copy_rates_from_pos(self.symbol, tf_code, 0, bars)
+        if rates is None or len(rates) < 50:
+            return None
+        import pandas as _pd
+        htf = _pd.DataFrame(rates)
+        htf["close"] = htf["close"].astype(float)
+        htf["EMA20"] = htf["close"].ewm(span=20).mean()
+        htf["EMA50"] = htf["close"].ewm(span=50).mean()
+        htf["diff"] = htf["high"] - htf["low"]
+        htf["plus_dm"] = 0.0
+        htf["minus_dm"] = 0.0
+        for i in range(1, len(htf)):
+            up = htf.iloc[i]["high"] - htf.iloc[i-1]["high"]
+            down = htf.iloc[i-1]["low"] - htf.iloc[i]["low"]
+            htf.iloc[i, htf.columns.get_loc("plus_dm")] = up if up > down and up > 0 else 0
+            htf.iloc[i, htf.columns.get_loc("minus_dm")] = down if down > up and down > 0 else 0
+        htf["ATR"] = htf["diff"].ewm(span=14).mean()
+        htf["plus_di"] = 100 * (htf["plus_dm"].ewm(span=14).mean() / htf["ATR"])
+        htf["minus_di"] = 100 * (htf["minus_dm"].ewm(span=14).mean() / htf["ATR"])
+        dx = abs(htf["plus_di"] - htf["minus_di"]) / (htf["plus_di"] + htf["minus_di"]) * 100
+        htf["ADX"] = dx.ewm(span=14).mean()
+        row = htf.iloc[-1]
+        return float(row["close"]), float(row["EMA20"]), float(row["EMA50"]), float(row["ADX"])
+
     def analyze(self, df, last):
 
         result = {}
@@ -45,37 +72,12 @@ class SmartScalpingEngine:
                 "H1": mt5.TIMEFRAME_H1, "H4": mt5.TIMEFRAME_H4,
             }
 
-            def _get_ema_adx(tf_code, bars=200):
-                rates = mt5.copy_rates_from_pos(self.symbol, tf_code, 0, bars)
-                if rates is None or len(rates) < 50:
-                    return None
-                import pandas as _pd
-                htf = _pd.DataFrame(rates)
-                htf["close"] = htf["close"].astype(float)
-                htf["EMA20"] = htf["close"].ewm(span=20).mean()
-                htf["EMA50"] = htf["close"].ewm(span=50).mean()
-                htf["diff"] = htf["high"] - htf["low"]
-                htf["plus_dm"] = 0.0
-                htf["minus_dm"] = 0.0
-                for i in range(1, len(htf)):
-                    up = htf.iloc[i]["high"] - htf.iloc[i-1]["high"]
-                    down = htf.iloc[i-1]["low"] - htf.iloc[i]["low"]
-                    htf.iloc[i, htf.columns.get_loc("plus_dm")] = up if up > down and up > 0 else 0
-                    htf.iloc[i, htf.columns.get_loc("minus_dm")] = down if down > up and down > 0 else 0
-                htf["ATR"] = htf["diff"].ewm(span=14).mean()
-                htf["plus_di"] = 100 * (htf["plus_dm"].ewm(span=14).mean() / htf["ATR"])
-                htf["minus_di"] = 100 * (htf["minus_dm"].ewm(span=14).mean() / htf["ATR"])
-                dx = abs(htf["plus_di"] - htf["minus_di"]) / (htf["plus_di"] + htf["minus_di"]) * 100
-                htf["ADX"] = dx.ewm(span=14).mean()
-                row = htf.iloc[-1]
-                return float(row["close"]), float(row["EMA20"]), float(row["EMA50"]), float(row["ADX"])
-
             raw_dir = momentum.get("direction", "NEUTRAL")
             override = None
 
             # Cek M5
             tf5 = tf_map.get(self.direction_tf, mt5.TIMEFRAME_M5)
-            m5_data = _get_ema_adx(tf5)
+            m5_data = self.get_ema_adx(tf5)
             if m5_data:
                 c5, e20_5, e50_5, adx5 = m5_data
                 # Cek arah candle M5 terakhir
@@ -98,7 +100,7 @@ class SmartScalpingEngine:
 
             # Cek M15 sebagai backup
             if override is None:
-                m15_data = _get_ema_adx(mt5.TIMEFRAME_M15)
+                m15_data = self.get_ema_adx(mt5.TIMEFRAME_M15)
                 if m15_data:
                     c15, e20_15, e50_15, adx15 = m15_data
                     # Cek juga arah candle M15 terakhir
