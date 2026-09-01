@@ -145,16 +145,6 @@ class SmartScalpingEngine:
                         momentum["trend_override"] = "M15_HARD_BLOCK_BULLISH"
 
             # ============================================
-            # HARD BLOCK M5 ADX: M5 ADX < 20 = BLOCK semua entry
-            # M5 terlalu lemah/flat, jangan entry sampai ADX naik
-            # ============================================
-            if m5_data:
-                c5, e20_5, e50_5, adx5 = m5_data
-                if adx5 < 20 and momentum.get("direction") in ("BUY", "SELL"):
-                    momentum["direction"] = "NEUTRAL"
-                    momentum["trend_override"] = "M5_ADX_WEAK_BLOCK"
-
-            # ============================================
             # HARD BLOCK M5: M5 bearish = BLOK BUY
             # Turunkan threshold ke ADX >= 25 supaya lebih banyak
             # waktu BUY diblokir saat market turun
