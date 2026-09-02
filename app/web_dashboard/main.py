@@ -3156,7 +3156,10 @@ let tvPositionLines = [];
 let tvPositionLabels = [];
 
 function clearTVPositionLabels() {
-  tvPositionLabels.forEach(el => { try { el.remove(); } catch(e) {} });
+  if (tvWidget && tvWidget.activeChart) {
+    const chart = tvWidget.activeChart();
+    tvPositionLabels.forEach(id => { try { chart.removeEntity(id); } catch(e) {} });
+  }
   tvPositionLabels = [];
 }
 
@@ -3166,9 +3169,6 @@ function updateTVPositionLabels(positions) {
   if (!positions || !positions.length) return;
   try {
     const chart = tvWidget.activeChart();
-    const chartEl = document.getElementById('tv_chart');
-    if (!chartEl) return;
-    const rect = chartEl.getBoundingClientRect();
     const COLORS = ['#60a5fa', '#a78bfa'];
     positions.forEach((p, idx) => {
       const isBuy = p.type === 'BUY';
@@ -3176,33 +3176,20 @@ function updateTVPositionLabels(positions) {
       const color = COLORS[idx % COLORS.length];
       const markerColor = isBuy ? '#22c55e' : '#ef4444';
       const arrow = isBuy ? '▲' : '▼';
-      const label = arrow + ' ' + p.type + ' #' + p.ticket;
       const pnl = p.profit || 0;
       const pnlStr = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+      const text = arrow + ' ' + p.type + ' #' + p.ticket + ' ' + pnlStr;
 
-      // Create HTML overlay label
-      const el = document.createElement('div');
-      el.style.cssText = 'position:absolute;left:0;pointer-events:none;z-index:10;font-size:11px;font-weight:700;white-space:nowrap;display:flex;align-items:center;gap:6px';
-      el.innerHTML = '<span style="background:' + markerColor + ';color:#fff;padding:2px 6px;border-radius:3px">' + label + '</span>' +
-        '<span style="color:' + (pnl >= 0 ? '#6ee7b7' : '#fca5a5') + ';font-size:10px">' + pnlStr + '</span>';
-      chartEl.appendChild(el);
-      tvPositionLabels.push(el);
-
-      // Position via priceToCoordinate
-      const tryPosition = () => {
-        try {
-          const y = chart.priceToCoordinate(entry);
-          if (y !== null && y !== undefined && y >= 0 && y <= rect.height) {
-            el.style.top = y - 10 + 'px';
-            el.style.display = 'flex';
-          } else {
-            el.style.display = 'none';
-          }
-        } catch(e) { el.style.display = 'none'; }
-      };
-      tryPosition();
-      // Reposition on scroll/zoom
-      chart.onVisibleRangeChanged(() => { setTimeout(tryPosition, 50); });
+      const txtId = chart.createShapeText({
+        points: [{ price: entry }],
+        text: text,
+        color: markerColor,
+        fontSize: 11,
+        lock: true, disableSelection: true, disableSave: true, disableUndo: true,
+      }, { shape: 'text' });
+      if (txtId) {
+        tvPositionLabels.push(txtId);
+      }
     });
   } catch(e) { console.error('TV position labels:', e); }
 }
