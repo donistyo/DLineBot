@@ -3153,45 +3153,36 @@ function rebuildTVChart() {
 
 // Draw position lines (Entry, SL, TP) + BUY/SELL markers on TradingView chart
 let tvPositionLines = [];
-let tvPositionLabels = [];
+let tvPositionLabelEl = null;
 
 function clearTVPositionLabels() {
-  if (tvWidget && tvWidget.activeChart) {
-    const chart = tvWidget.activeChart();
-    tvPositionLabels.forEach(id => { try { chart.removeEntity(id); } catch(e) {} });
-  }
-  tvPositionLabels = [];
+  if (tvPositionLabelEl) { try { tvPositionLabelEl.remove(); } catch(e) {} tvPositionLabelEl = null; }
 }
 
 function updateTVPositionLabels(positions) {
-  if (!tvWidget || !tvWidget.activeChart) return;
   clearTVPositionLabels();
-  if (!positions || !positions.length) return;
-  try {
-    const chart = tvWidget.activeChart();
-    const COLORS = ['#60a5fa', '#a78bfa'];
-    positions.forEach((p, idx) => {
-      const isBuy = p.type === 'BUY';
-      const entry = parseFloat(p.open_price);
-      const color = COLORS[idx % COLORS.length];
-      const markerColor = isBuy ? '#22c55e' : '#ef4444';
-      const arrow = isBuy ? '▲' : '▼';
-      const pnl = p.profit || 0;
-      const pnlStr = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
-      const text = arrow + ' ' + p.type + ' #' + p.ticket + ' ' + pnlStr;
-
-      const txtId = chart.createShapeText({
-        points: [{ price: entry }],
-        text: text,
-        color: markerColor,
-        fontSize: 11,
-        lock: true, disableSelection: true, disableSave: true, disableUndo: true,
-      }, { shape: 'text' });
-      if (txtId) {
-        tvPositionLabels.push(txtId);
-      }
-    });
-  } catch(e) { console.error('TV position labels:', e); }
+  const chartEl = document.getElementById('tv_chart');
+  if (!chartEl || !positions || !positions.length) return;
+  const div = document.createElement('div');
+  div.style.cssText = 'position:absolute;top:40px;left:10px;z-index:20;pointer-events:none;display:flex;flex-direction:column;gap:6px';
+  positions.forEach((p, idx) => {
+    const isBuy = p.type === 'BUY';
+    const markerColor = isBuy ? '#22c55e' : '#ef4444';
+    const arrow = isBuy ? '▲' : '▼';
+    const pnl = p.profit || 0;
+    const pnlStr = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+    const pnlColor = pnl >= 0 ? '#6ee7b7' : '#fca5a5';
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;background:rgba(0,0,0,0.7);padding:3px 8px;border-radius:4px;border-left:3px solid ' + markerColor;
+    row.innerHTML = '<span style="color:' + markerColor + ';font-weight:700;font-size:12px">' + arrow + ' ' + p.type + '</span>' +
+      '<span style="color:#aaa;font-size:11px">#' + p.ticket + '</span>' +
+      '<span style="color:#ddd;font-size:11px">@' + p.open_price + '</span>' +
+      '<span style="color:' + pnlColor + ';font-size:11px;font-weight:700">' + pnlStr + '</span>';
+    div.appendChild(row);
+  });
+  chartEl.style.position = 'relative';
+  chartEl.appendChild(div);
+  tvPositionLabelEl = div;
 }
 
 function drawTVPositionLines(positions) {
