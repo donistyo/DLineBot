@@ -162,9 +162,9 @@ class SmartScalpingEngine:
                         momentum["trend_override"] = "M5_BULLISH_BLOCK_SELL"
 
             # ============================================
-            # MEAN REVERSION AT RANGE EXTREMES
-            # Harga di ujung range → reverse arah entry
-            # BUY di bottom, SELL di top → entry melawan tren
+            # MEAN REVERSION + MOMENTUM CHECK
+            # Harga di ujung range + momentum lemah → reverse
+            # Harga di ujung range + momentum kuat → ikuti momentum
             # ============================================
             try:
                 if m5_data:
@@ -175,13 +175,17 @@ class SmartScalpingEngine:
                         ext_high = float(ext_df["high"].max())
                         ext_low = float(ext_df["low"].min())
                         ext_range = ext_high - ext_low
+                        c5_val = float(m5_data[0])
+                        adx5_val = float(m5_data[3])
                         if ext_range > 0:
-                            price_pos = (c5 - ext_low) / ext_range  # 0=bottom, 1=top
-                            # Harga di TOP → reverse ke SELL (mean reversion)
-                            if price_pos > 0.80 and momentum.get("direction") == "BUY":
+                            price_pos = (c5_val - ext_low) / ext_range  # 0=bottom, 1=top
+                            # Momentum kuat (ADX > 30) → ikuti momentum meski di ujung range
+                            if adx5_val > 30:
+                                pass  # tidak reverse, ikuti sinyal asli
+                            # Momentum lemah (ADX <= 30) → reverse di ujung range
+                            elif price_pos > 0.80 and momentum.get("direction") == "BUY":
                                 momentum["direction"] = "SELL"
                                 momentum["trend_override"] = "REVERSAL_TOP_SELL"
-                            # Harga di BOTTOM → reverse ke BUY (mean reversion)
                             elif price_pos < 0.20 and momentum.get("direction") == "SELL":
                                 momentum["direction"] = "BUY"
                                 momentum["trend_override"] = "REVERSAL_BOTTOM_BUY"
