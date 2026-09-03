@@ -162,9 +162,9 @@ class SmartScalpingEngine:
                         momentum["trend_override"] = "M5_BULLISH_BLOCK_SELL"
 
             # ============================================
-            # EXTENDED PRICE GUARD
-            # Jangan kejar harga yang sudah bergerak jauh
-            # Hitung jarak harga dari range recent
+            # MEAN REVERSION AT RANGE EXTREMES
+            # Harga di ujung range → reverse arah entry
+            # BUY di bottom, SELL di top → entry melawan tren
             # ============================================
             try:
                 if m5_data:
@@ -177,14 +177,14 @@ class SmartScalpingEngine:
                         ext_range = ext_high - ext_low
                         if ext_range > 0:
                             price_pos = (c5 - ext_low) / ext_range  # 0=bottom, 1=top
-                            # Extended di bawah: harga sudah jauh di bawah range → jangan SELL
-                            if price_pos < 0.25 and momentum.get("direction") == "SELL":
-                                momentum["direction"] = "NEUTRAL"
-                                momentum["trend_override"] = "EXTENDED_LOW_NO_SELL"
-                            # Extended di atas: harga sudah jauh di atas range → jangan BUY
-                            elif price_pos > 0.75 and momentum.get("direction") == "BUY":
-                                momentum["direction"] = "NEUTRAL"
-                                momentum["trend_override"] = "EXTENDED_HIGH_NO_BUY"
+                            # Harga di TOP → reverse ke SELL (mean reversion)
+                            if price_pos > 0.80 and momentum.get("direction") == "BUY":
+                                momentum["direction"] = "SELL"
+                                momentum["trend_override"] = "REVERSAL_TOP_SELL"
+                            # Harga di BOTTOM → reverse ke BUY (mean reversion)
+                            elif price_pos < 0.20 and momentum.get("direction") == "SELL":
+                                momentum["direction"] = "BUY"
+                                momentum["trend_override"] = "REVERSAL_BOTTOM_BUY"
             except Exception:
                 pass
 
