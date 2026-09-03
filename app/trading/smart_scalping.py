@@ -168,8 +168,8 @@ class SmartScalpingEngine:
             # ============================================
             try:
                 if m5_data:
-                    rates_ext = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M5, 0, 50)
-                    if rates_ext is not None and len(rates_ext) >= 20:
+                    rates_ext = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M5, 0, 30)
+                    if rates_ext is not None and len(rates_ext) >= 15:
                         import pandas as _pd
                         ext_df = _pd.DataFrame(rates_ext)
                         ext_high = float(ext_df["high"].max())
@@ -178,11 +178,11 @@ class SmartScalpingEngine:
                         if ext_range > 0:
                             price_pos = (c5 - ext_low) / ext_range  # 0=bottom, 1=top
                             # Extended di bawah: harga sudah jauh di bawah range → jangan SELL
-                            if price_pos < 0.15 and momentum.get("direction") == "SELL":
+                            if price_pos < 0.25 and momentum.get("direction") == "SELL":
                                 momentum["direction"] = "NEUTRAL"
                                 momentum["trend_override"] = "EXTENDED_LOW_NO_SELL"
                             # Extended di atas: harga sudah jauh di atas range → jangan BUY
-                            elif price_pos > 0.85 and momentum.get("direction") == "BUY":
+                            elif price_pos > 0.75 and momentum.get("direction") == "BUY":
                                 momentum["direction"] = "NEUTRAL"
                                 momentum["trend_override"] = "EXTENDED_HIGH_NO_BUY"
             except Exception:
