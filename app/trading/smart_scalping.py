@@ -193,9 +193,10 @@ class SmartScalpingEngine:
                 pass
 
             # ============================================
-            # M1 TREND CONFIRMATION
-            # M1 harus searah sinyal sebelum entry
-            # Cek close vs EMA20 pada M1
+            # M1 PULLBACK CHECK + TREND CONFIRMATION
+            # Entry harus menunggu pullback dulu
+            # SELL: harga harus naik dulu (pullback up), baru jual
+            # BUY: harga harus turun dulu (pullback down), baru beli
             # ============================================
             if momentum.get("direction") in ("BUY", "SELL"):
                 try:
@@ -204,17 +205,31 @@ class SmartScalpingEngine:
                         import pandas as _pd
                         m1_df = _pd.DataFrame(rates_m1)
                         m1_df["close"] = m1_df["close"].astype(float)
-                        m1_ema20 = m1_df["close"].ewm(span=20).mean().iloc[-1]
+                        m1_df["high"] = m1_df["high"].astype(float)
+                        m1_df["low"] = m1_df["low"].astype(float)
                         m1_close = float(m1_df["close"].iloc[-1])
+                        m1_ema20 = m1_df["close"].ewm(span=20).mean().iloc[-1]
                         m1_dir = momentum["direction"]
-                        # BUY tapi M1 close di bawah EMA20 → sedang pullback turun
-                        if m1_dir == "BUY" and m1_close < m1_ema20:
-                            momentum["direction"] = "NEUTRAL"
-                            momentum["trend_override"] = "M1_NOT_CONFIRMED_BUY"
-                        # SELL tapi M1 close di atas EMA20 → sedang pullback naik
-                        elif m1_dir == "SELL" and m1_close > m1_ema20:
-                            momentum["direction"] = "NEUTRAL"
-                            momentum["trend_override"] = "M1_NOT_CONFIRMED_SELL"
+
+                        # Cek 5 candle terakhir untuk pullback
+                        last5 = m1_df.tail(5)
+                        m1_high5 = float(last5["high"].max())
+                        m1_low5 = float(last5["low"].min())
+
+                        if m1_dir == "SELL":
+                            # SELL: pastikan harga pernah naik di atas entry (pullback up)
+                            pullback = m1_high5 > m1_close
+                            # Juga pastikan M1 tidak sedang rally kuat
+                            if not pullback or m1_close > m1_ema20 * 1.001:
+                                momentum["direction"] = "NEUTRAL"
+                                momentum["trend_override"] = "M1_NO_PULLBACK_SELL"
+                        elif m1_dir == "BUY":
+                            # BUY: pastikan harga pernah turun di bawah entry (pullback down)
+                            pullback = m1_low5 < m1_close
+                            # Juga pastikan M1 tidak sedang rally kuat ke bawah
+                            if not pullback or m1_close < m1_ema20 * 0.999:
+                                momentum["direction"] = "NEUTRAL"
+                                momentum["trend_override"] = "M1_NO_PULLBACK_BUY"
                 except Exception:
                     pass
 
