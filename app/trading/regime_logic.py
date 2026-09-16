@@ -87,10 +87,10 @@ def multi_tf_decision(regime_m5: Regime, regime_m15: Regime, signal_direction: s
     Return: (allow: bool, alignment_score: float, reason: str)
 
     Aturan:
-    - Total skor (M5 + M15) >= 1.5 -> izinkan
-        Kombinasi yang lolos: TREND+TREND (2.0), TREND+WEAK (1.5), WEAK+TREND (1.5)
-    - Total skor < 1.5 -> block
-        WEAK+WEAK (1.0) diblokir -> dua TF sama-sama lemah belum cukup.
+    - Total skor (M5 + M15) >= 2.0 -> izinkan
+        Hanya lolos: TREND+TREND (2.0)
+    - Total skor < 2.0 -> block
+        WEAK+TREND (1.5), TREND+WEAK (1.5), WEAK+WEAK (1.0) -> semua diblokir
     - Salah satu TF melawan arah sinyal -> skor TF itu 0, hampir pasti
       total < 1.5 -> block
     """
@@ -98,7 +98,7 @@ def multi_tf_decision(regime_m5: Regime, regime_m15: Regime, signal_direction: s
     score_m15 = _tf_score(regime_m15, signal_direction)
     total = score_m5 + score_m15
 
-    allow = total >= 1.5
+    allow = total >= 2.0
 
     reason = (
         f"M5={regime_m5.mode}({regime_m5.trend},adx={regime_m5.adx:.1f}) "
