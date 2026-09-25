@@ -1,0 +1,16 @@
+{
+  "max_trade": 100,
+  "equity_floor": 80,
+  "max_positions": 2,
+  "lot_size": 0.01,
+  "entry_copies_mode": "dual",
+  "max_lot": 0.02,
+  "fast_tp_usd": 0.5,
+  "stall_start_usd": 0.3,
+  "stall_seconds": 30,
+  "loser_seconds": 1200,
+  "max_profit_usd": 2.0,
+  "wick_reject_mult": 3.5,
+  "sl_atr_mult": 1.0,
+  "session_windows": [[23, 12], [13, 16]]
+}
