@@ -1,7 +1,7 @@
 import subprocess
 import time
 import MetaTrader5 as mt5
-from app.config.settings import MT5_LOGIN, MT5_PASSWORD, MT5_SERVER
+from app.config.settings import MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH
 from app.mt5.account_store import get_active_account
 
 
@@ -47,7 +47,7 @@ class MT5Session:
 
         if login_cfg and pass_cfg and serv_cfg:
             login = int(login_cfg) if str(login_cfg).isdigit() else login_cfg
-            ok = mt5.initialize(login=login, password=pass_cfg,
+            ok = mt5.initialize(path=MT5_PATH, login=login, password=pass_cfg,
                                 server=serv_cfg, timeout=60000)
             if ok:
                 acc = mt5.account_info()
@@ -89,7 +89,7 @@ class MT5Session:
             return False
 
         # Strategy 3: plain initialize (rely on terminal being pre-logged-in)
-        if mt5.initialize():
+        if mt5.initialize(path=MT5_PATH):
             cls._connected = True
             acc = mt5.account_info()
             if acc:

@@ -5,12 +5,16 @@ from datetime import datetime
 
 class SmartScalpingEngine:
 
+    STICKY_SECONDS = 30
+
     def __init__(self, symbol="XAUUSDc", direction_tf="M5"):
         self._last_5 = None
         self._prev_high = None
         self._prev_low = None
         self.symbol = symbol
         self.direction_tf = direction_tf
+        self._sticky_dir = None
+        self._sticky_time = 0
 
     def get_ema_adx(self, tf_code, bars=200):
         """Ambil close, EMA20, EMA50, ADX dari timeframe tertentu."""
@@ -280,8 +284,12 @@ class SmartScalpingEngine:
         # =====================================
         try:
             result["close"] = float(last.get("close", 0) or 0)
+            result["ema20"] = float(last.get("EMA20", 0) or 0)
             result["ema50"] = float(last.get("EMA50", 0) or 0)
             result["atr"] = float(last.get("ATR", 0) or 0)
+            _rsi_val = last.get("RSI", None)
+            if _rsi_val is not None:
+                result["RSI"] = float(_rsi_val)
         except Exception:
             pass
 
@@ -713,6 +721,20 @@ class SmartScalpingEngine:
         momentum = engines.get("momentum", {})
         direction = momentum.get("direction", "NEUTRAL")
         trend_override = momentum.get("trend_override")
+
+        # =====================================
+        # Sticky direction: jika NEUTRAL tapi
+        # arah terakhir masih dalam 30 detik,
+        # pakai arah terakhir.
+        # =====================================
+        import time as _time
+        now = _time.time()
+        if direction in ("BUY", "SELL"):
+            self._sticky_dir = direction
+            self._sticky_time = now
+        elif self._sticky_dir and (now - self._sticky_time) <= self.STICKY_SECONDS:
+            direction = self._sticky_dir
+            trend_override = trend_override or "STICKY_" + self._sticky_dir
 
         result = {
             "score": final_score,

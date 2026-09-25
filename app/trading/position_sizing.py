@@ -7,7 +7,9 @@ class PositionSizingAI:
         min_confidence=0.50,
         max_spread_ratio=0.5,
         rr_ratio=2.0,
-        lot_step=0.01
+        lot_step=0.01,
+        min_sl_points=15,
+        max_lot=0.02
     ):
         self.risk_percent = risk_percent
         self.atr_sl_multiplier = atr_sl_multiplier
@@ -15,6 +17,8 @@ class PositionSizingAI:
         self.max_spread_ratio = max_spread_ratio
         self.rr_ratio = rr_ratio
         self.lot_step = lot_step
+        self.min_sl_points = min_sl_points
+        self.max_lot = max_lot
 
     def calculate(
         self,
@@ -38,8 +42,7 @@ class PositionSizingAI:
         # 2. Stop Loss — ATR-based
         # =====================================
         sl_points = max(atr * self.atr_sl_multiplier, spread * 2)
-        if self.rr_ratio <= 2.0 and sl_points > 20:
-            sl_points = max(5, atr * self.atr_sl_multiplier)
+        sl_points = max(sl_points, self.min_sl_points)
         sl_points = round(sl_points, 1)
 
         if signal == "BUY":
@@ -123,6 +126,7 @@ class PositionSizingAI:
             raw_lot = adjusted_risk / (sl_points * 10)
             lot_size = round(raw_lot / self.lot_step) * self.lot_step
             lot_size = max(self.lot_step, lot_size)
+            lot_size = min(lot_size, self.max_lot)
 
         return {
             "entry_price": current_price,

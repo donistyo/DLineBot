@@ -19,6 +19,7 @@ APP_NAME = os.getenv("APP_NAME")
 MT5_LOGIN = os.getenv("MT5_LOGIN")
 MT5_PASSWORD = os.getenv("MT5_PASSWORD")
 MT5_SERVER = os.getenv("MT5_SERVER")
+MT5_PATH = os.getenv("MT5_PATH", r"D:\Project\bot\MetaTrader 5 EXNESS\terminal64.exe")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")

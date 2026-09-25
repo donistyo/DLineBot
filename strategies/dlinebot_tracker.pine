@@ -1,0 +1,121 @@
+//@version=5
+indicator("DLineBot Position Tracker", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// =====================================
+// Input
+// =====================================
+grp_vis = "Visibility"
+show_entry  = input.bool(true, "Show Entry Lines", group=grp_vis)
+show_sl     = input.bool(true, "Show Stop Loss", group=grp_vis)
+show_tp     = input.bool(true, "Show Take Profit", group=grp_vis)
+show_info   = input.bool(true, "Show Info Label", group=grp_vis)
+
+grp_style = "Style"
+entry_color = input.color(color.new(color.yellow, 0), "Entry Color", group=grp_style)
+sl_color    = input.color(color.new(color.red, 0), "SL Color", group=grp_style)
+tp_color    = input.color(color.new(color.green, 0), "TP Color", group=grp_style)
+line_width  = input.int(2, "Line Width", minval=1, maxval=5, group=grp_style)
+
+// =====================================
+// Webhook Data Storage
+// =====================================
+var float entry_price = na
+var float sl_price    = na
+var float tp_price    = na
+var string signal_dir = na
+var string trade_status = "NONE"
+var int trade_time    = 0
+
+// =====================================
+// Webhook Parser
+// =====================================
+// Format: "ACTION|SYMBOL|ENTRY|SL|TP|TIME"
+// Example: "BUY|XAUUSDc|4428.50|4418.50|4448.50|1694000000"
+
+if not na(alert_message)
+    parts = str.split(alert_message, "|")
+    if array.size(parts) >= 6
+        action = array.get(parts, 0)
+        entry_str = array.get(parts, 2)
+        sl_str = array.get(parts, 3)
+        tp_str = array.get(parts, 4)
+        time_str = array.get(parts, 5)
+        
+        if action == "BUY" or action == "SELL"
+            entry_price := float(entry_str)
+            sl_price    := float(sl_str)
+            tp_price    := float(tp_str)
+            signal_dir  := action
+            trade_status := "OPEN"
+            trade_time  := int(time_str)
+        else if action == "CLOSE"
+            trade_status := "CLOSED"
+            entry_price := na
+            sl_price    := na
+            tp_price    := na
+
+// =====================================
+// Plot Entry Lines (Dashed)
+// =====================================
+var line entry_line = na
+var line sl_line    = na
+var line tp_line    = na
+var label info_label = na
+
+if trade_status == "OPEN" and not na(entry_price)
+    // Delete old lines
+    if not na(entry_line)
+        line.delete(entry_line)
+    if not na(sl_line)
+        line.delete(sl_line)
+    if not na(tp_line)
+        line.delete(tp_line)
+    if not na(info_label)
+        line.delete(info_label)
+    
+    // Entry line (dashed yellow)
+    if show_entry
+        entry_line := line.new(bar_index - 50, entry_price, bar_index + 50, entry_price,
+             color=entry_color, style=line.style_dashed, width=line_width)
+    
+    // SL line (dashed red)
+    if show_sl and not na(sl_price)
+        sl_line := line.new(bar_index - 50, sl_price, bar_index + 50, sl_price,
+             color=sl_color, style=line.style_dashed, width=line_width)
+    
+    // TP line (dashed green)
+    if show_tp and not na(tp_price)
+        tp_line := line.new(bar_index - 50, tp_price, bar_index + 50, tp_price,
+             color=tp_color, style=line.style_dashed, width=line_width)
+    
+    // Info label
+    if show_info
+        info_text = str.format("{0} @ {1}\nSL: {2} | TP: {3}", 
+             signal_dir, str.tostring(entry_price, "#.##"),
+             str.tostring(sl_price, "#.##"), str.tostring(tp_price, "#.##"))
+        info_label := label.new(bar_index + 55, entry_price, info_text,
+             style=label.style_label_left, color=color.new(color.black, 80),
+             textcolor=color.white, size=size.small)
+
+// =====================================
+// Auto-delete when closed
+// =====================================
+if trade_status == "CLOSED"
+    if not na(entry_line)
+        line.delete(entry_line)
+        entry_line := na
+    if not na(sl_line)
+        line.delete(sl_line)
+        sl_line := na
+    if not na(tp_line)
+        line.delete(tp_line)
+        tp_line := na
+    if not na(info_label)
+        label.delete(info_label)
+        info_label := na
+
+// =====================================
+// Current Price Marker
+// =====================================
+plot(not na(entry_price) ? entry_price : na, "Entry", 
+     color=color.new(color.yellow, 50), style=plot.style_circles, linewidth=1)

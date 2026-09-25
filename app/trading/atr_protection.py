@@ -22,6 +22,7 @@ class ATRProtectionManager:
         early_pullback_atr=0.25,
         be_buffer_atr=0.0,
         fast_tp_usd=2.5,
+        max_profit_usd=2.0,
         stall_start_usd=1.0,
         stall_seconds=60,
         loser_seconds=600,
@@ -42,6 +43,7 @@ class ATRProtectionManager:
         self.early_pullback_atr = early_pullback_atr
         self.be_buffer_atr = be_buffer_atr
         self.fast_tp_usd = fast_tp_usd
+        self.max_profit_usd = max_profit_usd
         self.stall_start_usd = stall_start_usd
         self.stall_seconds = stall_seconds
         self.loser_seconds = loser_seconds
@@ -146,6 +148,16 @@ class ATRProtectionManager:
                         "reason": f"Posisi belum pernah profit ({self.loser_min_profit:.2f}) "
                                   f"setelah {open_age / 60:.1f} menit -> close loss kecil.",
                         "ticket": position.ticket, "result": result}
+
+        # ======================================
+        # MAX PROFIT: profit >= max_profit_usd -> langsung close.
+        # ======================================
+        if self.max_profit_usd > 0 and position.profit >= self.max_profit_usd:
+            _log_close("MAX_PROFIT", position.ticket, position.symbol, position.profit)
+            result = self.controller.close(position, caller="MAX_PROFIT")
+            return {"status": "CLOSED", "action": "MAX_PROFIT",
+                    "reason": f"Profit {position.profit:.2f} sudah >= max {self.max_profit_usd:.2f} USD.",
+                    "ticket": position.ticket, "result": result}
 
         # ======================================
         # FAST TP: profit sudah >= target USD -> langsung close.

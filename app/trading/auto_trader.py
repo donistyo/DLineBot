@@ -13,6 +13,27 @@ _entry_counter = 0
 
 SIGNAL_HISTORY_PATH = "runtime/signal_history.json"
 
+def _send_tv_alert(action, symbol, entry, sl, tp):
+    """Kirim alert ke TradingView via webhook untuk update chart."""
+    try:
+        import os, requests
+        tv_url = os.getenv("TRADINGVIEW_WEBHOOK_URL")
+        if not tv_url:
+            return
+        from datetime import datetime
+        payload = {
+            "action": action,
+            "symbol": symbol,
+            "entry": round(entry, 2) if entry else 0,
+            "sl": round(sl, 2) if sl else 0,
+            "tp": round(tp, 2) if tp else 0,
+            "time": int(datetime.now().timestamp()),
+        }
+        requests.post(tv_url, json=payload, timeout=5)
+    except Exception:
+        pass
+
+
 def _save_signal_history(signal, price, sl, tp, score=0, grade="-"):
     """Simpan history signal ke file untuk ditampilkan di chart."""
     try:
@@ -56,11 +77,13 @@ class AutoTrader:
             import json
             with open("runtime/trade_config.json") as f:
                 cfg = json.load(f)
-            mode = cfg.get("entry_copies_mode", "mixed")
+            mode = cfg.get("entry_copies_mode", "single")
             if mode == "mixed":
                 # 2 → 1 → 2 → 1 → ...
                 _entry_counter += 1
                 return 2 if _entry_counter % 2 == 1 else 1
+            elif mode == "dual":
+                return 2
             else:
                 return max(1, int(cfg.get("entry_copies", 1)))
         except Exception:
@@ -152,7 +175,7 @@ class AutoTrader:
             })
 
         all_success = all(r["success"] for r in results)
-        # Simpan signal history jika order berhasil
+        # Simpan signal history + kirim alert ke TV jika order berhasil
         if all_success:
             _save_signal_history(
                 signal=signal,
@@ -161,6 +184,13 @@ class AutoTrader:
                 tp=risk.get("take_profit"),
                 score=risk.get("score", 0),
                 grade=risk.get("grade", "-"),
+            )
+            _send_tv_alert(
+                action=signal,
+                symbol=symbol,
+                entry=risk.get("entry_price"),
+                sl=risk.get("stop_loss"),
+                tp=risk.get("take_profit"),
             )
         return {
 

@@ -1424,7 +1424,7 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 /* ===== TradingView monitor panel ===== */
 .tv-main { display:grid; grid-template-columns:1fr 340px; gap:12px; }
 @media(max-width:980px){ .tv-main { grid-template-columns:1fr; } }
-.tv-chart { background:rgba(30,41,59,0.5); border:1px solid rgba(59,130,246,0.08); border-radius:10px; padding:10px; min-height:560px; }
+.tv-chart { background:rgba(30,41,59,0.5); border:1px solid rgba(59,130,246,0.08); border-radius:10px; padding:10px; min-height:620px; }
 .tv-check { display:flex; flex-direction:column; gap:12px; min-width:0; }
 .tv-side { display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; grid-column:1 / -1; }
 @media(max-width:1280px){ .tv-side { grid-template-columns:repeat(3, 1fr); } }
@@ -1828,7 +1828,7 @@ tr:hover td { background:rgba(59,130,246,0.05); }
         LIVE MT5 <span id="tvLiveTs" style="color:#94a3b8">—</span>
       </span>
     </div>
-    <div id="tv_chart" style="min-height:520px;border-radius:8px;overflow:visible;position:relative"></div>
+    <div id="tv_chart" style="height:600px;min-height:600px;border-radius:8px;overflow:hidden;position:relative"></div>
     <div style="padding:6px 10px;font-size:10px;color:#94a3b8;background:rgba(15,23,42,0.5);border-radius:0 0 8px 8px;display:flex;gap:12px;flex-wrap:wrap">
       <span><span style="color:#fbbf24">---</span> Live MT5</span>
       <span><span style="color:#60a5fa">---</span> #1 Entry</span>
@@ -3122,28 +3122,63 @@ function tvConfig(symbol, interval, style) {
 
 function initTVChart(symbol, opts) {
   opts = opts || {};
+  const force = !!opts.force;
   const interval = opts.interval || localStorage.getItem('tv_interval') || '1';
   const style = '3';
   const tvSymbol = tvMapSymbol(symbol);
   const ident = tvSymbol + '|' + interval + '|' + style + '|navy';
-  if (tvWidget && tvWidgetSymbol === tvSymbol && tvWidgetIdent === ident) return;
+  if (!force && tvWidget && tvWidgetSymbol === tvSymbol && tvWidgetIdent === ident) return;
   const el = document.getElementById('tv_chart');
   if (!el) return;
   el.innerHTML = '';
   clearTVPositionLabels();
-  if (!window.TradingView) {
-    const s = document.createElement('script');
-    s.src = 'https://s3.tradingview.com/tv.js';
-    s.onload = () => initTVChart(symbol, opts);
-    el.innerHTML = '<div style="padding:60px;text-align:center;color:#64748b">Memuat TradingView...</div>';
-    document.head.appendChild(s);
-    return;
-  }
-  try {
-    tvWidget = new TradingView.widget(tvConfig(tvSymbol, interval, style));
-    tvWidgetSymbol = tvSymbol;
-    tvWidgetIdent = ident;
-  } catch(e) { console.error('TV widget:', e); }
+  tvWidget = null;
+  tvWidgetSymbol = '';
+  tvWidgetIdent = '';
+  const loading = document.createElement('div');
+  loading.style.cssText = 'padding:60px;text-align:center;color:#64748b';
+  loading.textContent = 'Memuat TradingView...';
+  el.appendChild(loading);
+
+  const boot = () => {
+    try {
+      const c = TV_THEMES.navy;
+      tvWidget = new TradingView.widget({
+        "width": "100%", "height": 600,
+        "symbol": tvSymbol, "interval": interval,
+        "timezone": "Asia/Jakarta",
+        "theme": c.theme, "style": style, "locale": "id",
+        "backgroundColor": c.bg,
+        "toolbar_bg": c.toolbar,
+        "gridColor": "rgba(148,163,184,0.08)",
+        "hide_top_toolbar": false, "hide_legend": false,
+        "save_image": false, "container_id": "tv_chart",
+        "allow_symbol_change": false,
+        "autosize": false
+      });
+      tvWidgetSymbol = tvSymbol;
+      tvWidgetIdent = ident;
+      if (tvWidget.onChartReady) {
+        tvWidget.onChartReady(() => {
+          try { tvWidget.resize(); } catch(e) {}
+        });
+      }
+    } catch(e) {
+      console.error('TV widget:', e);
+      loading.textContent = 'Gagal memuat chart TradingView: ' + e.message;
+      loading.style.color = '#f87171';
+    }
+  };
+
+  if (window.TradingView) { boot(); return; }
+  const s = document.createElement('script');
+  s.src = 'https://s3.tradingview.com/tv.js';
+  s.onload = boot;
+  s.onerror = () => {
+    loading.textContent = 'Gagal load script TradingView (cek koneksi internet browser)';
+    loading.style.color = '#f87171';
+  };
+  document.head.appendChild(s);
 }
 
 function rebuildTVChart() {
@@ -3349,8 +3384,8 @@ function tvMapSymbol(symbol) {
   const s = String(symbol || '').toUpperCase();
   if (s.includes('BTC')) return 'BINANCE:BTCUSDT';
   if (s.includes('ETH')) return 'BINANCE:ETHUSDT';
-  if (s.includes('XAU')) return 'FX:XAUUSD';
-  if (s.includes('XAG')) return 'FX:XAGUSD';
+  if (s.includes('XAU')) return 'OANDA:XAUUSD';
+  if (s.includes('XAG')) return 'OANDA:XAGUSD';
   return s.replace(/c$/i, '');
 }
 

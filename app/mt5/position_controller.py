@@ -113,9 +113,26 @@ class PositionController:
 
         result = mt5.order_send(request)
 
+        success = result.retcode == mt5.TRADE_RETCODE_DONE
+
+        if success:
+            try:
+                import os, requests as _req
+                tv_url = os.getenv("TRADINGVIEW_WEBHOOK_URL")
+                if tv_url:
+                    _req.post(tv_url, json={
+                        "action": "CLOSE",
+                        "symbol": position.symbol,
+                        "entry": position.price_open,
+                        "sl": 0, "tp": 0,
+                        "time": int(__import__("time").time()),
+                    }, timeout=5)
+            except Exception:
+                pass
+
         return {
 
-            "success": result.retcode == mt5.TRADE_RETCODE_DONE,
+            "success": success,
 
             "retcode": result.retcode,
 

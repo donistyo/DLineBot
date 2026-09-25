@@ -331,6 +331,7 @@ class LiveEngine:
             early_pullback_atr=float(get_trade_config("early_pullback_atr", 0.25)),
             be_buffer_atr=float(get_trade_config("be_buffer_atr", 0.0)),
             fast_tp_usd=float(get_trade_config("fast_tp_usd", 2.5)),
+            max_profit_usd=float(get_trade_config("max_profit_usd", 2.0)),
             stall_start_usd=float(get_trade_config("stall_start_usd", 1.0)),
             stall_seconds=float(get_trade_config("stall_seconds", 60.0)),
             loser_seconds=float(get_trade_config("loser_seconds", 600.0)),
@@ -981,8 +982,6 @@ class LiveEngine:
             _cfg_positions = get_trade_config("max_positions")
             if _cfg_positions:
                 self.position_filter.max_positions = int(_cfg_positions)
-            else:
-                self.position_filter.max_positions = 5 if _lot <= 0.01 else 3
 
             position_result = self.position_filter.allow(
                 self.symbol,
@@ -1151,7 +1150,7 @@ class LiveEngine:
 
             reentry_reason = self._reentry_blocked(
                 decision["action"],
-                cooldown_minutes=10,
+                cooldown_minutes=5,
                 cooldown_win_minutes=float(get_trade_config("reentry_cooldown_win_min", 10.0)),
             )
             same_dir_reason = self._same_dir_spacing_blocked(decision["action"])
@@ -1169,6 +1168,8 @@ class LiveEngine:
             except Exception:
                 pass
 
+            _tf_ok = bool(tf_confirmation.get("allowed", False)) if tf_confirmation else True
+
             can_trade = (
 
                 self._auto_trade_enabled
@@ -1183,7 +1184,7 @@ class LiveEngine:
 
                 and position_result["allowed"]
 
-                and (tf_confirmation.get("allowed", False) if tf_confirmation else True)
+                and _tf_ok
 
                 and not reentry_reason
 
@@ -1862,7 +1863,7 @@ class LiveEngine:
             self._score_penalty = 0
 
     def _current_min_score(self):
-        return 70 + self._score_penalty
+        return 55 + self._score_penalty
 
     # =====================================
     # Entry Checklist (live menuju dashboard)
@@ -1909,10 +1910,16 @@ class LiveEngine:
             not_manual = not decision.get("manual", False)
             items.append(self._ck("Bukan sinyal manual", not_manual, None))
 
+            _regime_trend = str(regime.get("trend", "SIDEWAYS")).upper() if regime else "SIDEWAYS"
+            _expected_dir = self.decision_engine.trend_map.get(_regime_trend)
+            if _regime_trend == "SIDEWAYS":
+                _regime_ok = action_ok and score >= 70
+            else:
+                _regime_ok = action_ok and direction == _expected_dir
             items.append(self._ck(
                 "Regime trend searah",
-                action_ok and direction == self.decision_engine.trend_map.get(str(regime.get("trend", "SIDEWAYS")).upper()),
-                f"Trend {regime.get('trend', 'SIDEWAYS')} vs {direction}"
+                _regime_ok,
+                f"Trend {_regime_trend} vs {direction}" + (" (SIDEWAYS: butuh score >= 70)" if _regime_trend == "SIDEWAYS" else "")
             ))
 
             items.append(self._ck("Trade filter (session/spread/vol)", filter_result.get("allowed", False), filter_result.get("reason", "")))
@@ -1922,7 +1929,7 @@ class LiveEngine:
             tf_allowed = bool(tf_confirmation.get("allowed", False)) if tf_confirmation else True
             items.append(self._ck("M5 & M15 searah sinyal", tf_allowed, (tf_confirmation or {}).get("reason", "")))
 
-            items.append(self._ck("Cooldown re-entry 15 menit", not reentry_reason, reentry_reason or None))
+            items.append(self._ck("Cooldown re-entry 5 menit", not reentry_reason, reentry_reason or None))
             items.append(self._ck("Spacing entry searah 60s", not same_dir_reason, same_dir_reason or None))
             items.append(self._ck("ATR volatility filter OK", atr_filter_ok, atr_filter_reason or None))
 
