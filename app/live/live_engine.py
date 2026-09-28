@@ -17,6 +17,7 @@ from app.trading.multi_tf_confirmation import MultiTimeframeConfirmation
 from app.trading.trade_scorer import TradeScorer
 from app.trading.trade_learner import TradeLearner
 from app.trading.auto_trader import AutoTrader
+from app.trading.basket_guard import BasketGuard
 
 from app.mt5.account_manager import AccountManager
 
@@ -427,6 +428,8 @@ class LiveEngine:
             max_spread_mult=999
         )
         self.emergency_exit.controller = self.controller
+
+        self.basket_guard = BasketGuard()
 
         self.trade_learner = TradeLearner(
             model_name=model_name
@@ -917,6 +920,27 @@ class LiveEngine:
             )
 
             # ===============================
+            # Tier downgrade: PREMIUM -> FALLBACK
+            # jika ada SL/exit loss dalam
+            # premium_sl_quiet_min menit terakhir
+            # (harga masih panas, jangan 10 layer).
+            # ===============================
+            try:
+                if int(decision.get("entry_layers") or 0) >= 5:
+                    _quiet_min = float(get_trade_config("premium_sl_quiet_min", 15) or 15)
+                    _sl_ev = self.history_manager.sl_events(symbol=self.symbol)
+                    if _sl_ev:
+                        _age_s = time.time() - float(_sl_ev[-1])
+                        if _age_s < _quiet_min * 60.0:
+                            decision["entry_layers"] = 2
+                            decision["tier_reason"] = (
+                                f"FALLBACK: SL terakhir {_age_s / 60.0:.0f} menit lalu "
+                                f"(< {_quiet_min:.0f} menit quiet window)"
+                            )
+            except Exception:
+                pass
+
+            # ===============================
             # Proposed Trade
             # ===============================
 
@@ -1018,6 +1042,28 @@ class LiveEngine:
             positions = self.position_manager.get_positions(
                 self.symbol
             )
+
+            # ===============================
+            # Basket guard: tutup semua layer
+            # premium jika floating tembus cut
+            # atau umur basket lewat timeout.
+            # ===============================
+            if positions:
+                try:
+                    _basket_results = self.basket_guard.process(
+                        positions,
+                        symbol=self.symbol,
+                        controller=self.controller,
+                    )
+                    for _br in _basket_results:
+                        ExitView.show(_br)
+                    if _basket_results:
+                        positions = self.position_manager.get_positions(
+                            self.symbol
+                        ) or []
+                except Exception as _berr:
+                    with open("runtime/basket_guard_error.log", "a") as _f:
+                        _f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {repr(_berr)}\n")
 
             active_tickets = {p.ticket for p in positions} if positions else set()
             closed_tickets = self._seen_tickets - active_tickets
@@ -1911,6 +1957,17 @@ class LiveEngine:
 
             not_manual = not decision.get("manual", False)
             items.append(self._ck("Bukan sinyal manual", not_manual, None))
+
+            # Tier entry (informatif, bukan blocker):
+            # PREMIUM xN = layer_count instan; FALLBACK = dual 2.
+            _layers = int(decision.get("entry_layers") or 2)
+            if _layers >= 5:
+                _tier_detail = f"PREMIUM x{_layers} - {decision.get('tier_reason', '')}"
+            elif decision.get("tier_reason"):
+                _tier_detail = str(decision.get("tier_reason"))
+            else:
+                _tier_detail = "FALLBACK x2"
+            items.append(self._ck("Tier entry (premium/fallback)", True, _tier_detail))
 
             _regime_trend = str(regime.get("trend", "SIDEWAYS")).upper() if regime else "SIDEWAYS"
             _expected_dir = self.decision_engine.trend_map.get(_regime_trend)

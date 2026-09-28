@@ -53,7 +53,7 @@ def get_safe_lot(balance, atr, sl_atr_mult=None, selected_lot=None):
 
 def get_max_positions_for_lot(lot):
     if lot <= 0.01:
-        return 5
+        return 10
     elif lot <= 0.05:
         return 3
     elif lot <= 0.10:

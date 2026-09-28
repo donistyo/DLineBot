@@ -16,5 +16,13 @@
   "daily_max_profit": 30,
   "sl_break_count": 2,
   "sl_break_minutes": 60,
-  "session_windows": [[23, 12], [13, 16]]
+  "session_windows": [[23, 12], [13, 16]],
+  "layer_count": 10,
+  "premium_min_score": 70,
+  "premium_max_tests": 10,
+  "premium_pos_min": 0.3,
+  "premium_pos_max": 0.7,
+  "premium_sl_quiet_min": 15,
+  "basket_cut_usd": -10,
+  "basket_timeout_min": 15
 }

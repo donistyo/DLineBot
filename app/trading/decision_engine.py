@@ -454,11 +454,55 @@ class DecisionEngine:
         except Exception:
             pass
 
+        # =====================================
+        # TIER ENTRY: PREMIUM (layer_count,
+        # default 10 instan) vs FALLBACK (2).
+        # Gate ketat: skor A (>=70), S/R tests60
+        # jauh dari ambang blokir (<=10), posisi
+        # harga di tengah range (30-70%), tanpa
+        # guard trend_override aktif.
+        # layer_count < 5 = kill switch (semua
+        # sinyal jadi FALLBACK 2 layer).
+        # =====================================
+        _entry_layers = 2
+        _tier_reason = "FALLBACK (default: layer_count < 5 atau gagal gate)"
+        try:
+            from app.config.settings import get_trade_config
+            _layer_cfg = int(get_trade_config("layer_count", 10) or 0)
+            if _layer_cfg >= 5:
+                _min_score = float(get_trade_config("premium_min_score", 70) or 70)
+                _max_tests = float(get_trade_config("premium_max_tests", 10) or 10)
+                _pos_min = float(get_trade_config("premium_pos_min", 0.30) or 0.30)
+                _pos_max = float(get_trade_config("premium_pos_max", 0.70) or 0.70)
+                _fail = []
+                if score < _min_score:
+                    _fail.append(f"score {score} < {_min_score:.0f}")
+                _tests60 = momentum.get("tests60")
+                if _tests60 is None:
+                    _fail.append("tests60 tidak tersedia")
+                elif float(_tests60) > _max_tests:
+                    _fail.append(f"tests60 {int(_tests60)} > {int(_max_tests)}")
+                if _audit_pos is None:
+                    _fail.append("pos_pct tidak tersedia")
+                elif not (_pos_min <= _audit_pos <= _pos_max):
+                    _fail.append(f"pos {int(_audit_pos * 100)}% di luar {int(_pos_min * 100)}-{int(_pos_max * 100)}%")
+                if momentum.get("trend_override"):
+                    _fail.append(f"guard aktif: {momentum.get('trend_override')}")
+                if not _fail:
+                    _entry_layers = _layer_cfg
+                    _tier_reason = f"PREMIUM x{_layer_cfg} (score {score}, tests60 {int(_tests60)}, pos {int(_audit_pos * 100)}%)"
+                else:
+                    _tier_reason = "FALLBACK: " + "; ".join(_fail)
+        except Exception:
+            _entry_layers = 2
+
         return {
             "action": direction,
             "reason": f"Scalp {grade} ({score}/100) searah trend {trend}",
             "confidence": score / 100,
             "score": score,
             "grade": grade,
-            "pos_pct": _audit_pos
+            "pos_pct": _audit_pos,
+            "entry_layers": _entry_layers,
+            "tier_reason": _tier_reason
         }

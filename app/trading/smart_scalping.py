@@ -250,12 +250,14 @@ class SmartScalpingEngine:
                                 if momentum["direction"] == "SELL":
                                     lo60 = float(w60["low"].min())
                                     tests = int((w60["low"] <= lo60 + 1.0 * m1_atr).sum())
+                                    momentum["tests60"] = tests
                                     if tests >= 16:
                                         momentum["direction"] = "NEUTRAL"
                                         momentum["trend_override"] = "M1_SUPPORT_TESTED_SELL"
                                 else:
                                     hi60 = float(w60["high"].max())
                                     tests = int((w60["high"] >= hi60 - 1.0 * m1_atr).sum())
+                                    momentum["tests60"] = tests
                                     if tests >= 16:
                                         momentum["direction"] = "NEUTRAL"
                                         momentum["trend_override"] = "M1_RESISTANCE_TESTED_BUY"

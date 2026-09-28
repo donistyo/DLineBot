@@ -95,7 +95,8 @@ class HistoryManager:
             e for e in exits
             if e.position_id in entry_pos_ids
             and e.comment
-            and (e.comment.startswith("[sl") or "LOSER_EXIT" in e.comment)
+            and (e.comment.startswith("[sl") or "LOSER_EXIT" in e.comment
+                 or "BASKET_CUT" in e.comment or "BASKET_TIME" in e.comment)
         ]
 
     # =====================================

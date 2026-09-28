@@ -34,7 +34,22 @@ def _send_tv_alert(action, symbol, entry, sl, tp):
         pass
 
 
-def _save_signal_history(signal, price, sl, tp, score=0, grade="-", reason="", pos_pct=None):
+def resolve_entry_copies(decision, fallback):
+    """Tentukan jumlah layer entry dari tier decision.
+
+    decision.entry_layers (PREMIUM, mis. 10) diprioritaskan;
+    selain itu pakai fallback dari config (single/dual/mixed).
+    """
+    try:
+        _dl = int((decision or {}).get("entry_layers") or 0)
+        if _dl >= 2:
+            return _dl
+    except Exception:
+        pass
+    return fallback
+
+
+def _save_signal_history(signal, price, sl, tp, score=0, grade="-", reason="", pos_pct=None, entry_layers=None, tier_reason=None):
     """Simpan history signal ke file untuk ditampilkan di chart."""
     try:
         history = []
@@ -50,6 +65,8 @@ def _save_signal_history(signal, price, sl, tp, score=0, grade="-", reason="", p
             "grade": grade,
             "reason": reason,
             "pos_pct": pos_pct,
+            "entry_layers": entry_layers,
+            "tier_reason": tier_reason,
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "timestamp": int(datetime.now().timestamp()),
         }
@@ -131,7 +148,7 @@ class AutoTrader:
         # ======================================
 
         signal = decision["action"]
-        copies = self._entry_copies()
+        copies = resolve_entry_copies(decision, self._entry_copies())
         requests = []
         for i in range(copies):
             comment = f"DLineBot #{i + 1}" if copies > 1 else "DLineBot"
@@ -188,6 +205,8 @@ class AutoTrader:
                 grade=decision.get("grade", risk.get("grade", "-")),
                 reason=decision.get("reason", ""),
                 pos_pct=decision.get("pos_pct"),
+                entry_layers=decision.get("entry_layers"),
+                tier_reason=decision.get("tier_reason"),
             )
             _send_tv_alert(
                 action=signal,
