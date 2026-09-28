@@ -204,7 +204,7 @@ class SmartScalpingEngine:
             # ============================================
             if momentum.get("direction") in ("BUY", "SELL"):
                 try:
-                    rates_m1 = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M1, 0, 30)
+                    rates_m1 = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M1, 0, 70)
                     if rates_m1 is not None and len(rates_m1) >= 20:
                         import pandas as _pd
                         m1_df = _pd.DataFrame(rates_m1)
@@ -234,6 +234,31 @@ class SmartScalpingEngine:
                             if not pullback or m1_close < m1_ema20 * 0.999:
                                 momentum["direction"] = "NEUTRAL"
                                 momentum["trend_override"] = "M1_NO_PULLBACK_BUY"
+
+                        # ============================================
+                        # LAYER 3: SUPPORT/RESISTANCE DENSITY GUARD
+                        # Jika zona low (atau high) 60 menit terlalu
+                        # sering diuji -> harga mendekam di support/
+                        # resistance, rawan bouncing. Jangan lawan.
+                        # Kalibrasi 28 Sep: loser 16:39 tests=17,
+                        # winner maks=14 -> threshold 16.
+                        # ============================================
+                        if momentum.get("direction") in ("BUY", "SELL") and len(m1_df) >= 60:
+                            m1_atr = float((m1_df["high"] - m1_df["low"]).tail(14).mean())
+                            if m1_atr > 0:
+                                w60 = m1_df.tail(60)
+                                if momentum["direction"] == "SELL":
+                                    lo60 = float(w60["low"].min())
+                                    tests = int((w60["low"] <= lo60 + 1.0 * m1_atr).sum())
+                                    if tests >= 16:
+                                        momentum["direction"] = "NEUTRAL"
+                                        momentum["trend_override"] = "M1_SUPPORT_TESTED_SELL"
+                                else:
+                                    hi60 = float(w60["high"].max())
+                                    tests = int((w60["high"] >= hi60 - 1.0 * m1_atr).sum())
+                                    if tests >= 16:
+                                        momentum["direction"] = "NEUTRAL"
+                                        momentum["trend_override"] = "M1_RESISTANCE_TESTED_BUY"
                 except Exception:
                     pass
 

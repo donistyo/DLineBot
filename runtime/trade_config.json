@@ -11,6 +11,8 @@
   "loser_seconds": 1200,
   "max_profit_usd": 2.0,
   "wick_reject_mult": 3.5,
-  "sl_atr_mult": 1.0,
+  "sl_atr_mult": 0.7,
+  "daily_max_loss": -15,
+  "daily_max_profit": 30,
   "session_windows": [[23, 12], [13, 16]]
 }
