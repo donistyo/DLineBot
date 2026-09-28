@@ -2531,6 +2531,11 @@ async function fetchAutoTradeMonitor() {
         '<span>'+p.profit+'</span>' +
         '<span style="font-size:10px;color:#94a3b8">'+(p.open_time||'')+'</span>' +
         '<span style="font-size:10px;color:#94a3b8">'+(p.be?'BE ':'')+(p.ts?'TS ':'')+'</span>' +
+      '</div>' +
+      '<div style="display:flex;justify-content:space-between;padding:0 0 4px;font-size:10px;color:#64748b">' +
+        '<span>Entry '+p.open_price+'</span>' +
+        '<span>SL <span style="color:#f87171">'+(p.sl||'-')+'</span></span>' +
+        '<span>TP <span style="color:#6ee7b7">'+(p.tp||'-')+'</span></span>' +
       '</div>'
     ).join('') : '<div style="color:#64748b;padding:4px 0">Tidak ada posisi</div>';
 
@@ -2572,6 +2577,11 @@ async function fetchAutoTradeMonitor() {
         '<span>'+p.profit+'</span>' +
         '<span style="font-size:10px;color:#94a3b8">'+(p.open_time||'')+'</span>' +
         '<span style="font-size:10px;color:#94a3b8">'+(p.be?'BE ':'')+(p.ts?'TS ':'')+'</span>' +
+      '</div>' +
+      '<div style="display:flex;justify-content:space-between;padding:0 0 4px;font-size:10px;color:#64748b">' +
+        '<span>Entry '+p.open_price+'</span>' +
+        '<span>SL <span style="color:#f87171">'+(p.sl||'-')+'</span></span>' +
+        '<span>TP <span style="color:#6ee7b7">'+(p.tp||'-')+'</span></span>' +
       '</div>'
     ).join('') : '<div style="color:#64748b;padding:4px 0">Tidak ada posisi</div>';
     document.getElementById('atm_pend_count2').textContent = pen.length;
