@@ -41,6 +41,31 @@ def start_engine():
     print("Live engine started.")
 
 
+def start_engine_watchdog():
+    """Restart engine otomatis jika thread-nya mati (exception tak tertangani)."""
+    def _watch():
+        global _runner, _runner_thread
+        while True:
+            import time
+            time.sleep(30)
+            try:
+                if _runner is None or _runner_thread is None:
+                    continue
+                if not _runner_thread.is_alive():
+                    print(f"[WATCHDOG] Engine thread mati - restart {time.strftime('%H:%M:%S')}")
+                    with open("logs/runner_error.log", "a") as f:
+                        f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] WATCHDOG: engine thread mati, restart otomatis\n")
+                    try:
+                        _runner.running = False
+                    except Exception:
+                        pass
+                    _runner = None
+                    start_engine()
+            except Exception as e:
+                print(f"[WATCHDOG] error: {e}")
+    threading.Thread(target=_watch, daemon=True).start()
+
+
 def stop_engine():
     global _runner
     if _runner and _runner.running:
@@ -66,6 +91,7 @@ if __name__ == "__main__":
     set_key(ENV_PATH, "DASHBOARD_URL", local_url)
 
     start_engine()
+    start_engine_watchdog()
     atexit.register(stop_engine)
 
     print("=" * 60)

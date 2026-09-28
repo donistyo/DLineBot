@@ -99,7 +99,14 @@ class LiveRunner:
                     self.rebuild_engine()
                     self.telegram.send(f"Engine restart -> {self.symbol}")
 
-                self.engine.run_once()
+                try:
+                    self.engine.run_once()
+                except KeyboardInterrupt:
+                    raise
+                except Exception:
+                    self._log_cycle_error()
+                    time.sleep(3)
+                    continue
 
                 if not self.running:
                     break
@@ -108,9 +115,10 @@ class LiveRunner:
                 print("=" * 60)
                 print("SCHEDULER")
                 print("=" * 60)
-                print(f"Waiting {self.interval} seconds...")
+                delay = self._dynamic_delay()
+                print(f"Waiting {delay} seconds...")
 
-                time.sleep(self.interval)
+                time.sleep(delay)
 
         except KeyboardInterrupt:
 
@@ -119,6 +127,28 @@ class LiveRunner:
         finally:
 
             self.engine.stop()
+
+    def _dynamic_delay(self):
+        """Posisi terbuka -> polling lebih cepat (3s) agar FAST_TP sempat jalan."""
+        try:
+            import MetaTrader5 as mt5
+            pos = mt5.positions_get()
+            if pos and len(pos) > 0:
+                return 3
+        except Exception:
+            pass
+        return self.interval
+
+    def _log_cycle_error(self):
+        import traceback
+        from datetime import datetime
+        msg = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] RUN_ONCE ERROR\n{traceback.format_exc()}\n"
+        print(msg)
+        try:
+            with open("logs/runner_error.log", "a") as f:
+                f.write(msg)
+        except Exception:
+            pass
 
     def _current_symbol(self):
         try:
