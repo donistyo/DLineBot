@@ -751,15 +751,23 @@ class SmartScalpingEngine:
         # Sticky direction: jika NEUTRAL tapi
         # arah terakhir masih dalam 30 detik,
         # pakai arah terakhir.
+        # TAPI: NEUTRAL yang disebabkan guard
+        # (trend_override terisi: M1_NO_PULLBACK_*,
+        # M1_SUPPORT_TESTED_*, M15_HARD_BLOCK_*, dst)
+        # TIDAK boleh di-resurrect - guard harus final.
+        # (Bug 28 Sep: sticky me-resurrect SELL guard
+        #  -> entry 18:42 lolos di ambang tests60=16)
         # =====================================
         import time as _time
         now = _time.time()
         if direction in ("BUY", "SELL"):
             self._sticky_dir = direction
             self._sticky_time = now
-        elif self._sticky_dir and (now - self._sticky_time) <= self.STICKY_SECONDS:
+        elif (self._sticky_dir
+              and (now - self._sticky_time) <= self.STICKY_SECONDS
+              and not trend_override):
             direction = self._sticky_dir
-            trend_override = trend_override or "STICKY_" + self._sticky_dir
+            trend_override = "STICKY_" + self._sticky_dir
 
         result = {
             "score": final_score,
