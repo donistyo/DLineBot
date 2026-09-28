@@ -858,9 +858,19 @@ def api_auto_trade_monitor():
 
     try:
         with open("runtime/trade_config.json") as _f:
-            _lot = json.load(_f).get("lot_size", 0.01)
+            _tc = json.load(_f)
+            _lot = _tc.get("lot_size", 0.01)
+            _fast_tp = _tc.get("fast_tp_usd", 0.5)
+            _max_prof = _tc.get("max_profit_usd", 2.0)
     except:
         _lot = 0.01
+        _fast_tp = 0.5
+        _max_prof = 2.0
+
+    for _p in pos_out:
+        _p["fast_tp"] = _fast_tp
+        _p["max_profit"] = _max_prof
+
     _lot_opts = [0.01, 0.02, 0.03, 0.05, 0.10, 0.20, 0.50, 1.0]
 
     _enabled = _AUTO_TRADE_ENABLED
@@ -2535,7 +2545,7 @@ async function fetchAutoTradeMonitor() {
       '<div style="display:flex;justify-content:space-between;padding:0 0 4px;font-size:10px;color:#64748b">' +
         '<span>Entry '+p.open_price+'</span>' +
         '<span>SL <span style="color:#f87171">'+(p.sl||'-')+'</span></span>' +
-        '<span>TP <span style="color:#6ee7b7">'+(p.tp||'-')+'</span></span>' +
+        '<span>TP <span style="color:#6ee7b7">'+(p.tp || (p.fast_tp ? 'engine $'+Number(p.fast_tp).toFixed(2) : '-'))+'</span></span>' +
       '</div>'
     ).join('') : '<div style="color:#64748b;padding:4px 0">Tidak ada posisi</div>';
 
@@ -2581,7 +2591,7 @@ async function fetchAutoTradeMonitor() {
       '<div style="display:flex;justify-content:space-between;padding:0 0 4px;font-size:10px;color:#64748b">' +
         '<span>Entry '+p.open_price+'</span>' +
         '<span>SL <span style="color:#f87171">'+(p.sl||'-')+'</span></span>' +
-        '<span>TP <span style="color:#6ee7b7">'+(p.tp||'-')+'</span></span>' +
+        '<span>TP <span style="color:#6ee7b7">'+(p.tp || (p.fast_tp ? 'engine $'+Number(p.fast_tp).toFixed(2) : '-'))+'</span></span>' +
       '</div>'
     ).join('') : '<div style="color:#64748b;padding:4px 0">Tidak ada posisi</div>';
     document.getElementById('atm_pend_count2').textContent = pen.length;
@@ -3585,12 +3595,12 @@ function renderTVPosition(positions, tick) {
     const liveColor = isBuy ? '#6ee7b7' : '#fca5a5';
     const borderColor = COLORS[idx % COLORS.length];
     html += '<div style="border-left:3px solid ' + borderColor + ';padding-left:8px;margin-bottom:' + (idx < positions.length-1 ? '12px' : '0') + '">' +
-      '<div style="font-size:11px;color:' + borderColor + ';font-weight:600;margin-bottom:4px">#' + (idx+1) + ' ' + p.ticket + ' &mdash; ' + (isBuy ? 'BUY' : 'SELL') + ' ' + pct.toFixed(2).replace('.00','') + ' lot</div>' +
+      '<div style="font-size:11px;color:' + borderColor + ';font-weight:600;margin-bottom:4px">#' + (idx+1) + ' ' + p.ticket + ' &mdash; ' + (isBuy ? 'BUY' : 'SELL') + ' ' + Number(p.volume).toFixed(2) + ' lot</div>' +
       '<div class="tv-pos-row"><span class="k">Entry</span><span class="v">' + p.open_price + '</span></div>' +
       '<div class="tv-pos-row"><span class="k">Live ' + (isBuy ? 'Bid' : 'Ask') + '</span><span class="v" style="color:' + liveColor + '">' + live + '</span></div>' +
       '<div class="tv-pos-row"><span class="k">Jarak</span><span class="v">' + (p.dist !== undefined && p.dist !== null ? (p.dist >= 0 ? '+' : '') + p.dist : '-') + '</span></div>' +
       '<div class="tv-pos-row"><span class="k">SL</span><span class="v">' + (p.sl || '-') + '</span></div>' +
-      '<div class="tv-pos-row"><span class="k">TP</span><span class="v">' + (p.tp || '-') + '</span></div>' +
+      '<div class="tv-pos-row"><span class="k">TP</span><span class="v">' + (p.tp ? p.tp : (p.fast_tp ? 'engine $' + Number(p.fast_tp).toFixed(2) : '-')) + '</span></div>' +
       '<div class="tv-pos-row"><span class="k">Waktu</span><span class="v">' + (p.open_time || '-') + '</span></div>' +
       '<div class="tv-pnl"><span class="pnl-lbl">PnL</span><span class="pnl-val" style="color:' + pnlColor + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</span></div>' +
       '<div style="margin-top:6px"><button onclick="closeTVPosition(' + p.ticket + ')" style="width:100%;padding:5px 0;background:#dc2626;color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:11px;font-weight:600">Close #' + p.ticket + '</button></div>' +
