@@ -34,7 +34,7 @@ def _send_tv_alert(action, symbol, entry, sl, tp):
         pass
 
 
-def _save_signal_history(signal, price, sl, tp, score=0, grade="-"):
+def _save_signal_history(signal, price, sl, tp, score=0, grade="-", reason="", pos_pct=None):
     """Simpan history signal ke file untuk ditampilkan di chart."""
     try:
         history = []
@@ -48,6 +48,8 @@ def _save_signal_history(signal, price, sl, tp, score=0, grade="-"):
             "tp": round(tp, 5) if tp else None,
             "score": score,
             "grade": grade,
+            "reason": reason,
+            "pos_pct": pos_pct,
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "timestamp": int(datetime.now().timestamp()),
         }
@@ -182,8 +184,10 @@ class AutoTrader:
                 price=risk.get("entry_price", 0),
                 sl=risk.get("stop_loss"),
                 tp=risk.get("take_profit"),
-                score=risk.get("score", 0),
-                grade=risk.get("grade", "-"),
+                score=decision.get("score", risk.get("score", 0)),
+                grade=decision.get("grade", risk.get("grade", "-")),
+                reason=decision.get("reason", ""),
+                pos_pct=decision.get("pos_pct"),
             )
             _send_tv_alert(
                 action=signal,

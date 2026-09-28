@@ -443,10 +443,22 @@ class DecisionEngine:
                 "grade": grade
             }
 
+        # Audit: posisi harga dalam range (untuk signal_history)
+        _audit_pos = None
+        try:
+            _ac = float(scalp_result.get("close", 0) or 0)
+            _ah = float(scalp_result.get("range_high", 0) or 0)
+            _al = float(scalp_result.get("range_low", 0) or 0)
+            if _ac > 0 and _ah > _al:
+                _audit_pos = round((_ac - _al) / (_ah - _al), 3)
+        except Exception:
+            pass
+
         return {
             "action": direction,
             "reason": f"Scalp {grade} ({score}/100) searah trend {trend}",
             "confidence": score / 100,
             "score": score,
-            "grade": grade
+            "grade": grade,
+            "pos_pct": _audit_pos
         }

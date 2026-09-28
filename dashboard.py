@@ -50,6 +50,11 @@ def start_engine_watchdog():
             time.sleep(30)
             try:
                 if _runner is None or _runner_thread is None:
+                    # engine belum pernah start / start gagal -> coba lagi
+                    try:
+                        start_engine()
+                    except Exception as e:
+                        print(f"[WATCHDOG] engine start gagal: {e}")
                     continue
                 if not _runner_thread.is_alive():
                     print(f"[WATCHDOG] Engine thread mati - restart {time.strftime('%H:%M:%S')}")
@@ -90,7 +95,12 @@ if __name__ == "__main__":
 
     set_key(ENV_PATH, "DASHBOARD_URL", local_url)
 
-    start_engine()
+    try:
+        start_engine()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        print("[DASHBOARD] Engine gagal start - dashboard tetap jalan, watchdog akan coba lagi")
     start_engine_watchdog()
     atexit.register(stop_engine)
 
