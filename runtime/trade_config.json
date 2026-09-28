@@ -12,7 +12,9 @@
   "max_profit_usd": 2.0,
   "wick_reject_mult": 3.5,
   "sl_atr_mult": 0.7,
-  "daily_max_loss": -15,
+  "daily_max_loss": -40,
   "daily_max_profit": 30,
+  "sl_break_count": 2,
+  "sl_break_minutes": 60,
   "session_windows": [[23, 12], [13, 16]]
 }

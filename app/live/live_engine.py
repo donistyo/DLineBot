@@ -367,7 +367,9 @@ class LiveEngine:
         self.daily_risk = DailyRiskManager(
             max_trade=daily_max_trade,
             max_daily_loss=daily_max_loss,
-            max_daily_profit=daily_max_profit
+            max_daily_profit=daily_max_profit,
+            sl_break_count=get_trade_config("sl_break_count") or 0,
+            sl_break_minutes=get_trade_config("sl_break_minutes") or 0
         )
 
         self.performance = PerformanceManager()

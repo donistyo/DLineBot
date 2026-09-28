@@ -80,6 +80,45 @@ class HistoryManager:
 
         return self._today_exits(symbol, bot_only)
 
+    # =====================================
+    # SL exits today (comment "[sl ...]")
+    # =====================================
+
+    def sl_exits(self, symbol=None, bot_only=True):
+
+        entries = self.today(symbol=symbol, bot_only=bot_only)
+        entry_pos_ids = {d.position_id for d in entries}
+
+        exits = self._today_exits(symbol=symbol, bot_only=False)
+
+        return [
+            e for e in exits
+            if e.position_id in entry_pos_ids
+            and e.comment
+            and (e.comment.startswith("[sl") or "LOSER_EXIT" in e.comment)
+        ]
+
+    # =====================================
+    # SL events today (dual pair = 1 event)
+    # returns list of exit times (epoch), clustered 30s
+    # =====================================
+
+    def sl_events(self, symbol=None, bot_only=True):
+
+        exits = self.sl_exits(symbol=symbol, bot_only=bot_only)
+
+        times = sorted(int(e.time) for e in exits)
+
+        events = []
+
+        for t in times:
+
+            if not events or t - events[-1] > 30:
+
+                events.append(t)
+
+        return events
+
     def summary(self, symbol=None, bot_only=False):
 
         entries = self.today(symbol, bot_only)
