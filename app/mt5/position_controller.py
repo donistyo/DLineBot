@@ -226,6 +226,13 @@ class PositionController:
 
         result = mt5.order_send(request)
 
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            try:
+                with open(CLOSE_LOG, "a") as f:
+                    f.write(f"[{datetime.datetime.now():%H:%M:%S}] MODIFY_SL_FAIL ticket={position.ticket} sl={stop_loss} retcode={result.retcode} comment={result.comment}\n")
+            except Exception:
+                pass
+
         return {
 
             "success": result.retcode == mt5.TRADE_RETCODE_DONE,

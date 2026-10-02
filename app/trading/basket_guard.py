@@ -53,8 +53,14 @@ class BasketGuard:
             timeout_min = float(get_trade_config("basket_timeout_min", 15))
         except Exception:
             timeout_min = 15.0
+        try:
+            min_size = int(get_trade_config("basket_min_size", 0) or 0)
+        except Exception:
+            min_size = 0
+        if min_size < 2:
+            min_size = max(2, layer_count // 2)
         return {
-            "min_size": max(2, layer_count // 2),
+            "min_size": min_size,
             "cut": cut,
             "timeout_s": max(1.0, timeout_min * 60.0),
             "timeout_min": timeout_min,
