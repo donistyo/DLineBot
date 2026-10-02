@@ -12,6 +12,7 @@ from datetime import datetime
 _entry_counter = 0
 
 SIGNAL_HISTORY_PATH = "runtime/signal_history.json"
+BBMA_HISTORY_PATH = "runtime/bbma_history.json"
 
 def _send_tv_alert(action, symbol, entry, sl, tp):
     """Kirim alert ke TradingView via webhook untuk update chart."""
@@ -49,8 +50,16 @@ def resolve_entry_copies(decision, fallback):
     return fallback
 
 
-def _save_signal_history(signal, price, sl, tp, score=0, grade="-", reason="", pos_pct=None, entry_layers=None, tier_reason=None):
-    """Simpan history signal ke file untuk ditampilkan di chart."""
+def _save_signal_history(signal, price, sl, tp, score=0, grade="-", reason="", pos_pct=None, entry_layers=None, tier_reason=None,
+                         entry_strategy=None, bbma_slope=None, bbma_dist_mid=None):
+    """Simpan history signal ke file untuk ditampilkan di chart.
+
+    Field BBMA (entry_strategy/bbma_slope/bbma_dist_mid) dicatat di tiap
+    entry untuk riset korelasi slope_strength/dist_mid_atr vs hasil trade.
+
+    signal_history dibatasi 50 entri (tampilan chart) - untuk sampling
+    1-2 minggu pakai bbma_history.json (append-only, tanpa batas).
+    """
     try:
         history = []
         if os.path.exists(SIGNAL_HISTORY_PATH):
@@ -67,6 +76,9 @@ def _save_signal_history(signal, price, sl, tp, score=0, grade="-", reason="", p
             "pos_pct": pos_pct,
             "entry_layers": entry_layers,
             "tier_reason": tier_reason,
+            "entry_strategy": entry_strategy,
+            "bbma_slope": bbma_slope,
+            "bbma_dist_mid": bbma_dist_mid,
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "timestamp": int(datetime.now().timestamp()),
         }
@@ -75,6 +87,16 @@ def _save_signal_history(signal, price, sl, tp, score=0, grade="-", reason="", p
         history = history[-50:]
         with open(SIGNAL_HISTORY_PATH, "w") as f:
             json.dump(history, f, indent=2)
+
+        # Append-only tanpa batas: file riset BBMA (dipakai analisis
+        # korelasi slope_strength/dist_mid_atr vs P/L setelah 1-2 minggu)
+        bbma_history = []
+        if os.path.exists(BBMA_HISTORY_PATH):
+            with open(BBMA_HISTORY_PATH) as f:
+                bbma_history = json.load(f)
+        bbma_history.append(entry)
+        with open(BBMA_HISTORY_PATH, "w") as f:
+            json.dump(bbma_history, f, indent=2)
     except Exception:
         pass
 
@@ -207,6 +229,9 @@ class AutoTrader:
                 pos_pct=decision.get("pos_pct"),
                 entry_layers=decision.get("entry_layers"),
                 tier_reason=decision.get("tier_reason"),
+                entry_strategy=decision.get("entry_strategy"),
+                bbma_slope=decision.get("bbma_slope"),
+                bbma_dist_mid=decision.get("bbma_dist_mid"),
             )
             _send_tv_alert(
                 action=signal,
