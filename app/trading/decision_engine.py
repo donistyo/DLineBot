@@ -5,7 +5,88 @@ class DecisionEngine:
         self.sideways_penalty = 15
         self.trend_map = {"UP": "BUY", "DOWN": "SELL", "SIDEWAYS": None}
 
+    @staticmethod
+    def _entry_strategy():
+        try:
+            from app.config.settings import get_trade_config
+            return str(get_trade_config("entry_strategy", "scalp") or "scalp").lower()
+        except Exception:
+            return "scalp"
+
+    @staticmethod
+    def _decide_bbma(scalp_result):
+        """Mode BBMA: seluruh gate scalp lama dilewati.
+
+        Keputusan murni dari state BBMA (analyze()) yang dilampirkan di
+        scalp_result["bbma"]: arah dari slope mid BB M5 + M15 wajib searah,
+        trigger = reentry pullback ke mid BB, anti-chase = jaga jarak.
+        Layer entry selalu dual 2 (fixed) - tiering menyusul setelah data
+        slope_strength/dist_mid_atr terkumpul 1-2 minggu.
+        """
+        if scalp_result is None:
+            return {"action": "NO_TRADE", "reason": "Data tidak tersedia", "confidence": 0}
+        bbma = scalp_result.get("bbma")
+        if not isinstance(bbma, dict):
+            return {
+                "action": "NO_TRADE",
+                "reason": "BBMA: data tidak tersedia (analyze belum jalan)",
+                "confidence": 0,
+                "score": 0,
+                "grade": "-",
+            }
+
+        direction = bbma.get("direction", "NEUTRAL")
+        slope = bbma.get("slope_strength")
+        dist = bbma.get("dist_mid_atr")
+        base = {
+            "confidence": 0,
+            "score": 0,
+            "grade": "-",
+            "pos_pct": None,
+            "entry_strategy": "bbma",
+            "bbma_slope": slope,
+            "bbma_dist_mid": dist,
+        }
+
+        if direction not in ("BUY", "SELL"):
+            return {
+                "action": "NO_TRADE",
+                "reason": bbma.get("reason") or "BBMA: arah netral",
+                **base,
+            }
+
+        # Defense-in-depth: anti-chase (analyze sudah cek, cek ulang di sini)
+        try:
+            from app.config.settings import get_trade_config
+            _anti = float(get_trade_config("bbma_anti_chase_atr", 2.0) or 2.0)
+        except Exception:
+            _anti = 2.0
+        if dist is not None and float(dist) > _anti:
+            return {
+                "action": "NO_TRADE",
+                "reason": f"BBMA anti-chase: harga {float(dist):.1f}xATR dari mid BB (>{_anti:.1f})",
+                **base,
+            }
+
+        if not bbma.get("trigger"):
+            return {
+                "action": "NO_TRADE",
+                "reason": bbma.get("reason") or "BBMA: reentry belum valid",
+                **base,
+            }
+
+        return {
+            "action": direction,
+            "reason": bbma.get("reason") or f"BBMA reentry {direction}",
+            **base,
+            "entry_layers": 2,
+            "tier_reason": f"BBMA fixed dual (slope {slope}, dist {dist} ATR)",
+        }
+
     def decide(self, prediction=None, scalp_result=None, regime=None, higher_trend=None, higher_adx=0) -> dict:
+        if self._entry_strategy() == "bbma":
+            return self._decide_bbma(scalp_result)
+
         if scalp_result is None or regime is None:
             return {"action": "NO_TRADE", "reason": "Data tidak tersedia", "confidence": 0}
 
@@ -465,7 +546,7 @@ class DecisionEngine:
         # sinyal jadi FALLBACK 2 layer).
         # =====================================
         _entry_layers = 2
-        _tier_reason = "FALLBACK (default: layer_count < 5 atau gagal gate)"
+        _tier_reason = "default: layer_count < 5 atau gagal gate"
         try:
             from app.config.settings import get_trade_config
             _layer_cfg = int(get_trade_config("layer_count", 10) or 0)
@@ -488,13 +569,42 @@ class DecisionEngine:
                     _fail.append(f"pos {int(_audit_pos * 100)}% di luar {int(_pos_min * 100)}-{int(_pos_max * 100)}%")
                 if momentum.get("trend_override"):
                     _fail.append(f"guard aktif: {momentum.get('trend_override')}")
+                # Entry quality: jangan 10-layer saat harga terlalu
+                # tinggi di range pendek (rng_pos) atau saat mengejar
+                # (chase). Kalibrasi 30d: SL 32%->27%, EV naik.
+                _max_rng = float(get_trade_config("premium_max_range_pos", 0.75) or 1.0)
+                _rng = momentum.get("rng_pos_m1")
+                if _rng is None:
+                    _fail.append("rng_pos tidak tersedia")
+                elif float(_rng) > _max_rng:
+                    _fail.append(f"rng_pos {int(float(_rng) * 100)}% > {int(_max_rng * 100)}%")
+                _max_chase = float(get_trade_config("premium_max_chase", 0.5) or 999.0)
+                _chase = momentum.get("chase3_m1")
+                if _chase is None:
+                    _fail.append("chase tidak tersedia")
+                elif float(_chase) > _max_chase:
+                    _fail.append(f"chase {float(_chase):.2f} > {_max_chase:.2f} ATR")
                 if not _fail:
-                    _entry_layers = _layer_cfg
-                    _tier_reason = f"PREMIUM x{_layer_cfg} (score {score}, tests60 {int(_tests60)}, pos {int(_audit_pos * 100)}%)"
+                    _copies = int(get_trade_config("premium_copies", _layer_cfg) or _layer_cfg)
+                    _entry_layers = max(2, min(_layer_cfg, _copies))
+                    _tier_reason = f"score {score}, tests60 {int(_tests60)}, pos {int(_audit_pos * 100)}%"
                 else:
-                    _tier_reason = "FALLBACK: " + "; ".join(_fail)
+                    _tier_reason = "; ".join(_fail)
         except Exception:
             _entry_layers = 2
+
+        _guard = momentum.get("trend_override")
+        if _guard:
+            return {
+                "action": "NO_TRADE",
+                "reason": f"Guard trend aktif ({_guard}) - entry diblokir.",
+                "confidence": score / 100,
+                "score": score,
+                "grade": grade,
+                "pos_pct": _audit_pos,
+                "entry_layers": 2,
+                "tier_reason": f"guard aktif: {_guard}"
+            }
 
         return {
             "action": direction,
