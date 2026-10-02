@@ -194,7 +194,7 @@ class LiveEngine:
             _s_start, _s_end = _sym_params.get("session", (0, 23))
 
         self.decision_engine = DecisionEngine(
-            min_scalp_score=55
+            min_scalp_score=60
         )
 
         self.risk_manager = RiskManager(
@@ -319,6 +319,7 @@ class LiveEngine:
         self.atr_protection = ATRProtectionManager(
             sl_atr_mult=float(get_trade_config("sl_atr_mult", 1.5)),
             be_trigger_atr=float(get_trade_config("be_trigger_atr", 0.5)),
+            be_lock_usd=float(get_trade_config("be_lock_usd", 0.0)),
             partial_trigger_atr=float(get_trade_config("partial_trigger_atr", 1.0)),
             partial_pct=float(get_trade_config("partial_pct", 0.5)),
             trail_activation_atr=float(get_trade_config("trail_activation_atr", 1.5)),
@@ -332,11 +333,15 @@ class LiveEngine:
             early_pullback_atr=float(get_trade_config("early_pullback_atr", 0.25)),
             be_buffer_atr=float(get_trade_config("be_buffer_atr", 0.0)),
             fast_tp_usd=float(get_trade_config("fast_tp_usd", 2.5)),
+            tp_atr_mult=float(get_trade_config("tp_atr_mult", 0.0)),
             max_profit_usd=float(get_trade_config("max_profit_usd", 2.0)),
             stall_start_usd=float(get_trade_config("stall_start_usd", 1.0)),
             stall_seconds=float(get_trade_config("stall_seconds", 60.0)),
             loser_seconds=float(get_trade_config("loser_seconds", 600.0)),
             loser_min_profit=float(get_trade_config("loser_min_profit", 0.0)),
+            sl_plus_usd=float(get_trade_config("sl_plus_usd", 0.0)),
+            sl_plus_buffer_usd=float(get_trade_config("sl_plus_buffer", 0.10)),
+            emergency_max_usd=float(get_trade_config("emergency_max_usd", 0.0)),
         )
 
         self.break_even = BreakEvenManager(
@@ -834,6 +839,28 @@ class LiveEngine:
 
             scalp_result = self.smart_scalping.analyze(df, last)
             SmartScalpingView.show(scalp_result)
+
+            # ===============================
+            # BBMA (mode entry_strategy=bbma):
+            # arah + trigger dari BBMA (slope mid BB
+            # M5, M5/M15 wajib searah, reentry
+            # pullback ke mid BB). Data riset:
+            # slope_strength & dist_mid_atr ikut
+            # tersimpan di scalp_result["bbma"].
+            # ===============================
+            try:
+                if self._entry_strategy() == "bbma":
+                    from app.trading import bbma_strategy
+                    scalp_result["bbma"] = bbma_strategy.analyze(self.symbol)
+            except Exception as _bbma_exc:
+                scalp_result["bbma"] = {
+                    "direction": "NEUTRAL",
+                    "trigger": False,
+                    "slope_strength": 0.0,
+                    "dist_mid_atr": 0.0,
+                    "reason": f"BBMA: analyze gagal ({_bbma_exc})",
+                }
+
             Path("runtime").mkdir(exist_ok=True)
             with open("runtime/scalping.json", "w") as f:
                 json.dump(scalp_result, f, default=str, indent=2)
@@ -926,7 +953,7 @@ class LiveEngine:
             # (harga masih panas, jangan 10 layer).
             # ===============================
             try:
-                if int(decision.get("entry_layers") or 0) >= 5:
+                if int(decision.get("entry_layers") or 0) > 2:
                     _quiet_min = float(get_trade_config("premium_sl_quiet_min", 15) or 15)
                     _sl_ev = self.history_manager.sl_events(symbol=self.symbol)
                     if _sl_ev:
@@ -934,7 +961,7 @@ class LiveEngine:
                         if _age_s < _quiet_min * 60.0:
                             decision["entry_layers"] = 2
                             decision["tier_reason"] = (
-                                f"FALLBACK: SL terakhir {_age_s / 60.0:.0f} menit lalu "
+                                f"SL terakhir {_age_s / 60.0:.0f} menit lalu "
                                 f"(< {_quiet_min:.0f} menit quiet window)"
                             )
             except Exception:
@@ -1093,6 +1120,12 @@ class LiveEngine:
                         _atr_m5 = float(self.atr_helper.current_atr())
                         if _atr_m5 > 0:
                             _atr_now = _atr_m5
+                        try:
+                            with open("runtime/atr_debug.log", "a") as _f:
+                                _f.write(f"{time.strftime('%H:%M:%S')} CYCLE npos={len(positions)} "
+                                         f"atr_now={_atr_now:.3f} tickets={[p.ticket for p in positions]}\n")
+                        except Exception:
+                            pass
                         ap_result = self.atr_protection.process(
                             position, _atr_now, float(last["close"])
                         )
@@ -1198,7 +1231,7 @@ class LiveEngine:
 
             reentry_reason = self._reentry_blocked(
                 decision["action"],
-                cooldown_minutes=5,
+                cooldown_minutes=float(get_trade_config("reentry_cooldown_min", 5) or 0),
                 cooldown_win_minutes=float(get_trade_config("reentry_cooldown_win_min", 10.0)),
             )
             same_dir_reason = self._same_dir_spacing_blocked(decision["action"])
@@ -1210,13 +1243,25 @@ class LiveEngine:
             _atr_filter_reason = None
             try:
                 with open("runtime/trade_config.json") as _f:
-                    _vol_filter_on = bool(json.load(_f).get("atr_volatility_filter", True))
+                    _cfg_vol = json.load(_f)
+                _vol_filter_on = bool(_cfg_vol.get("atr_volatility_filter", True))
+                _atr_entry_max = float(_cfg_vol.get("atr_entry_max", 0) or 0)
                 if _vol_filter_on:
                     _atr_filter_ok, _atr_filter_reason = self.atr_helper.volatility_ok()
+                if _atr_filter_ok and _atr_entry_max > 0:
+                    _cur_atr = self.atr_helper.current_atr()
+                    if _cur_atr > _atr_entry_max:
+                        _atr_filter_ok = False
+                        _atr_filter_reason = f"ATR {_cur_atr:.2f} > maks entry {_atr_entry_max:.2f}"
             except Exception:
                 pass
 
-            _tf_ok = bool(tf_confirmation.get("allowed", False)) if tf_confirmation else True
+            if self._entry_strategy() == "bbma":
+                # Gate multi-TF lama dibypass: konfirmasi M15 sudah
+                # menjadi syarat wajib di dalam BBMA analyze().
+                _tf_ok = True
+            else:
+                _tf_ok = bool(tf_confirmation.get("allowed", False)) if tf_confirmation else True
 
             can_trade = (
 
@@ -1285,10 +1330,18 @@ class LiveEngine:
                         risk["lot_size"] = _cfg.get("lot_size", TRADE_LOT_SIZE)
                         _use_atr = bool(_cfg.get("use_atr_protection", True))
                         _sl_atr_mult = float(_cfg.get("sl_atr_mult", 2.5))
+                        _tp_usd = float(_cfg.get("fast_tp_usd", 0) or 0)
+                        _tp_atr_mult = float(_cfg.get("tp_atr_mult", 0) or 0)
+                        _fb_tp = float(_cfg.get("fallback_tp_usd", 0) or 0)
+                        _sl_plus = float(_cfg.get("sl_plus_usd", 0) or 0)
                 except:
                     risk["lot_size"] = TRADE_LOT_SIZE
                     _use_atr = True
                     _sl_atr_mult = 2.5
+                    _tp_usd = 0.0
+                    _tp_atr_mult = 0.0
+                    _fb_tp = 0.0
+                    _sl_plus = 0.0
                 _sp = get_symbol_params(self.symbol)
                 _sl_pts = float(_sp.get("sl_points", 6.0))
                 _tp1_pts = float(_sp.get("tp1_points", _sl_pts * 1.5))
@@ -1320,12 +1373,32 @@ class LiveEngine:
                 if _safe_max_pos < self.position_filter.max_positions:
                     self.position_filter.max_positions = _safe_max_pos
                     print(f"  Max positions disesuaikan ke {_safe_max_pos} (lot {risk['lot_size']})")
+
+                # TP server: langsung ditutup broker saat harga menyentuh target.
+                # Fallback (<5 layer) -> fallback_tp_usd tetap (bank cepat),
+                # premium -> tp_atr_mult x ATR, selain itu fast_tp_usd/(lotx100).
+                if _use_atr and _atr_now > 0:
+                    _layers = int(decision.get("entry_layers") or 2)
+                    if _layers <= 2 and _fb_tp > 0 and risk["lot_size"] > 0:
+                        _tp_dist = _fb_tp / (float(risk["lot_size"]) * 100.0)
+                    elif _tp_atr_mult > 0:
+                        _tp_dist = _tp_atr_mult * _atr_now
+                    elif _tp_usd > 0 and risk["lot_size"] > 0:
+                        _tp_dist = _tp_usd / (float(risk["lot_size"]) * 100.0)
+
                 if decision["action"] == "BUY":
                     risk["stop_loss"] = round(risk["entry_price"] - _sl_dist, 5)
                     risk["take_profit"] = round(risk["entry_price"] + _tp_dist, 5) if _tp_dist > 0 else 0.0
                 elif decision["action"] == "SELL":
                     risk["stop_loss"] = round(risk["entry_price"] + _sl_dist, 5)
                     risk["take_profit"] = round(risk["entry_price"] - _tp_dist, 5) if _tp_dist > 0 else 0.0
+
+                # SL+ mode: fallback (<5 layer) dibuka TANPA SL (tahan floating).
+                # SL dikunci di entry +/- sl_plus_usd oleh ATRProtection
+                # saat profit >= sl_plus + buffer; exit = server TP / SL+ / emergency.
+                _layers_sl = int(decision.get("entry_layers") or 2)
+                if _layers_sl <= 2 and _sl_plus > 0:
+                    risk["stop_loss"] = 0.0
 
             # ===============================
             # AI Trade Score
@@ -1425,7 +1498,7 @@ class LiveEngine:
 
                 }
 
-            elif tf_confirmation and not tf_confirmation.get("allowed", False):
+            elif self._entry_strategy() != "bbma" and tf_confirmation and not tf_confirmation.get("allowed", False):
 
                 result = {
 
@@ -1859,6 +1932,8 @@ class LiveEngine:
             return 0.0
 
     def _reentry_blocked(self, decision_action, cooldown_minutes=15, cooldown_win_minutes=5):
+        if cooldown_minutes <= 0:
+            return None
         if not self._last_closed_direction or not self._last_closed_time:
             return None
         if decision_action != self._last_closed_direction:
@@ -1913,6 +1988,13 @@ class LiveEngine:
     def _current_min_score(self):
         return 55 + self._score_penalty
 
+    def _entry_strategy(self):
+        """Mode strategi entry: 'scalp' (lama) atau 'bbma' (utama)."""
+        try:
+            return str(get_trade_config("entry_strategy", "scalp") or "scalp").lower()
+        except Exception:
+            return "scalp"
+
     # =====================================
     # Entry Checklist (live menuju dashboard)
     # =====================================
@@ -1932,6 +2014,8 @@ class LiveEngine:
             items = []
             items.append(self._ck("Autotrade ON", self._auto_trade_enabled, None))
 
+            _bbma_mode = self._entry_strategy() == "bbma"
+
             equity_floor_ok = True
             try:
                 _account = self.account_manager.get_info()
@@ -1943,12 +2027,28 @@ class LiveEngine:
                 floor = 100.0
             items.append(self._ck("Equity > floor", equity_floor_ok, f"Equity vs floor {floor:.0f}"))
 
-            sig_enough = score >= min_score
-            items.append(self._ck(
-                f"Scalp score >= {min_score}",
-                sig_enough,
-                f"{score:.1f}/100 {score_data.get('grade', '-')}" + (f" (penalti loss x{penalty})" if penalty else "")
-            ))
+            if _bbma_mode:
+                _b = (scalp_result or {}).get("bbma") or {}
+                _b_ok = bool(_b.get("trigger")) and action in ("BUY", "SELL")
+                items.append(self._ck(
+                    "BBMA reentry (M5 + wajib M15)",
+                    _b_ok,
+                    _b.get("reason") or "BBMA data tidak tersedia",
+                ))
+
+            if _bbma_mode:
+                items.append(self._ck(
+                    f"Scalp score >= {min_score} (mode BBMA - bypass)",
+                    True,
+                    f"{score:.1f}/100 {score_data.get('grade', '-')} - skor tidak dipakai di mode BBMA",
+                ))
+            else:
+                sig_enough = score >= min_score
+                items.append(self._ck(
+                    f"Scalp score >= {min_score}",
+                    sig_enough,
+                    f"{score:.1f}/100 {score_data.get('grade', '-')}" + (f" (penalti loss x{penalty})" if penalty else "")
+                ))
 
             items.append(self._ck("Arah sinyal jelas", action in ("BUY", "SELL"), f"Direction {direction}"))
 
@@ -1959,37 +2059,57 @@ class LiveEngine:
             items.append(self._ck("Bukan sinyal manual", not_manual, None))
 
             # Tier entry (informatif, bukan blocker):
-            # PREMIUM xN = layer_count instan; FALLBACK = dual 2.
+            # N layer instan = layer_count; fallback = dual 2.
+            # Mode BBMA: selalu dual 2 fixed (tiering menyusul
+            # setelah data slope_strength/dist terkumpul).
             _layers = int(decision.get("entry_layers") or 2)
-            if _layers >= 5:
-                _tier_detail = f"PREMIUM x{_layers} - {decision.get('tier_reason', '')}"
-            elif decision.get("tier_reason"):
-                _tier_detail = str(decision.get("tier_reason"))
+            if _bbma_mode:
+                _label = "Entry 2 layer (BBMA fixed dual)"
+            elif _layers > 2:
+                _label = f"Entry {_layers} layer"
             else:
-                _tier_detail = "FALLBACK x2"
-            items.append(self._ck("Tier entry (premium/fallback)", True, _tier_detail))
+                _label = f"Entry {_layers} layer (fallback)"
+            _tier_detail = str(decision.get("tier_reason")) if decision.get("tier_reason") else None
+            items.append(self._ck(_label, True, _tier_detail))
 
             _regime_trend = str(regime.get("trend", "SIDEWAYS")).upper() if regime else "SIDEWAYS"
             _expected_dir = self.decision_engine.trend_map.get(_regime_trend)
-            if _regime_trend == "SIDEWAYS":
-                _regime_ok = action_ok and score >= 70
+            if _bbma_mode:
+                items.append(self._ck(
+                    "Regime trend searah (mode BBMA - bypass)",
+                    True,
+                    f"Trend {_regime_trend} - arah ditentukan BBMA M5+M15, bukan regime",
+                ))
             else:
-                _regime_ok = action_ok and direction == _expected_dir
-            items.append(self._ck(
-                "Regime trend searah",
-                _regime_ok,
-                f"Trend {_regime_trend} vs {direction}" + (" (SIDEWAYS: butuh score >= 70)" if _regime_trend == "SIDEWAYS" else "")
-            ))
+                if _regime_trend == "SIDEWAYS":
+                    _regime_ok = action_ok and score >= 70
+                else:
+                    _regime_ok = action_ok and direction == _expected_dir
+                items.append(self._ck(
+                    "Regime trend searah",
+                    _regime_ok,
+                    f"Trend {_regime_trend} vs {direction}" + (" (SIDEWAYS: butuh score >= 70)" if _regime_trend == "SIDEWAYS" else "")
+                ))
 
             items.append(self._ck("Trade filter (session/spread/vol)", filter_result.get("allowed", False), filter_result.get("reason", "")))
             items.append(self._ck("Daily risk OK", daily_result.get("allowed", False), daily_result.get("reason", "")))
             items.append(self._ck("Posisi aman (max/arah/loss)", position_result.get("allowed", False), position_result.get("reason", "")))
 
-            tf_allowed = bool(tf_confirmation.get("allowed", False)) if tf_confirmation else True
-            items.append(self._ck("M5 & M15 searah sinyal", tf_allowed, (tf_confirmation or {}).get("reason", "")))
+            if _bbma_mode:
+                items.append(self._ck(
+                    "M5 & M15 searah sinyal (mode BBMA - di dalam analyze)",
+                    True,
+                    (tf_confirmation or {}).get("reason") or "Konfirmasi M15 jadi syarat wajib BBMA",
+                ))
+            else:
+                tf_allowed = bool(tf_confirmation.get("allowed", False)) if tf_confirmation else True
+                items.append(self._ck("M5 & M15 searah sinyal", tf_allowed, (tf_confirmation or {}).get("reason", "")))
 
-            items.append(self._ck("Cooldown re-entry 5 menit", not reentry_reason, reentry_reason or None))
-            items.append(self._ck("Spacing entry searah 60s", not same_dir_reason, same_dir_reason or None))
+            _cd_min = int(float(get_trade_config("reentry_cooldown_min", 5) or 0))
+            items.append(self._ck(
+                f"Cooldown re-entry {'mati' if _cd_min <= 0 else str(_cd_min) + ' menit'}",
+                not reentry_reason, reentry_reason or None))
+            items.append(self._ck(f"Spacing entry searah {self._same_dir_spacing:.0f}s", not same_dir_reason, same_dir_reason or None))
             items.append(self._ck("ATR volatility filter OK", atr_filter_ok, atr_filter_reason or None))
 
             session_ok = True
