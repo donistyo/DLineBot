@@ -1365,7 +1365,7 @@ table { width:100%; border-collapse:separate; border-spacing:0; background:rgba(
 .recap-table tr:hover td { background:rgba(59,130,246,0.05); }
 .pos { color:#6ee7b7; }
 .neg { color:#fca5a5; }
-th { background:rgba(51,65,85,0.5); text-align:left; padding:6px 8px; color:#94a3b8; text-transform:uppercase; font-size:9px; letter-spacing:0.3px; }
+th { background:rgba(51,65,85,0.5); text-align:left; padding:6px 8px; color:#94a3b8; text-transform:uppercase; font-size:9px; letter-spacing:0.3px; position:sticky; top:0; z-index:1; }
 td { padding:5px 8px; border-top:1px solid rgba(51,65,85,0.3); }
 tr:hover td { background:rgba(59,130,246,0.05); }
 .badge { display:inline-block; padding:2px 6px; border-radius:4px; font-size:9px; font-weight:600; }
@@ -1466,6 +1466,13 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 .tv-pnl { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; background:rgba(15,23,42,0.9); border:1px solid rgba(51,65,85,0.5); border-radius:8px; margin-top:6px; }
 .tv-pnl .pnl-lbl { font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; }
 .tv-pnl .pnl-val { font-family:'JetBrains Mono',monospace; font-size:18px; font-weight:700; }
+#tvPosBody { max-height:340px; overflow-y:auto; padding-right:2px; }
+.tv-pos-item { background:rgba(15,23,42,0.7); border-left:3px solid #60a5fa; border-radius:0 7px 7px 0; padding:5px 8px; margin-bottom:6px; }
+.tv-pos-head { display:flex; align-items:center; gap:6px; font-size:11.5px; font-weight:600; }
+.tv-pos-head .v { font-family:'JetBrains Mono',monospace; }
+.tv-pos-head .pi-pnl { margin-left:auto; font-family:'JetBrains Mono',monospace; font-size:12.5px; font-weight:700; }
+.tv-pos-close { background:#dc2626; color:#fff; border:none; border-radius:4px; width:18px; height:18px; font-size:10px; line-height:18px; cursor:pointer; padding:0; flex:0 0 auto; }
+.tv-pos-meta { margin-top:3px; font-size:10px; color:#94a3b8; font-family:'JetBrains Mono',monospace; line-height:1.5; }
 .tv-risk { background:rgba(30,41,59,0.6); border:1px solid rgba(59,130,246,0.08); border-radius:10px; padding:14px; }
 .tv-risk-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
 .tv-risk-cell { background:rgba(15,23,42,0.9); border:1px solid rgba(51,65,85,0.5); border-radius:7px; padding:10px 12px; }
@@ -1549,7 +1556,7 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 
 <h2>Open Position</h2>
 <div id="positionInfo" style="margin-bottom:6px;font-size:12px;"></div>
-<div class="table-wrap"><table><thead><tr>
+<div class="table-wrap" style="max-height:320px;overflow-y:auto"><table><thead><tr>
   <th>Ticket</th><th>Type</th><th>Vol</th><th>Entry</th><th>Current</th><th>Profit</th><th>SL</th><th>TP</th>
 </tr></thead><tbody id="positions"></tbody></table></div>
 
@@ -3583,36 +3590,41 @@ function renderTVPosition(positions, tick) {
   tag.textContent = positions.length + ' POSISI';
   tag.style.color = '#60a5fa';
   const COLORS = ['#60a5fa', '#a78bfa'];
-  let html = '';
   let totalPnl = 0;
+  positions.forEach((p) => { totalPnl += p.profit || 0; });
+  const totalColor = totalPnl >= 0 ? '#6ee7b7' : '#fca5a5';
+  let html = '<div style="padding:6px 8px;margin-bottom:8px;background:rgba(99,102,241,0.1);border-radius:6px;font-size:12px;display:flex;justify-content:space-between;align-items:center">' +
+    '<span style="color:#94a3b8">Total PnL: <b style="color:' + totalColor + '">' + (totalPnl >= 0 ? '+' : '') + '$' + totalPnl.toFixed(2) + '</b></span>' +
+    '<span style="color:#64748b;font-size:10px">' + positions.length + ' layer</span>' +
+    '</div>';
   positions.forEach((p, idx) => {
     const isBuy = p.type === 'BUY';
     const pnl = p.profit || 0;
-    totalPnl += pnl;
     const pnlColor = pnl >= 0 ? '#6ee7b7' : '#fca5a5';
-    const pct = p.volume * 100;
     const live = (isBuy ? (tick && tick.bid) : (tick && tick.ask)) || p.current;
     const liveColor = isBuy ? '#6ee7b7' : '#fca5a5';
     const borderColor = COLORS[idx % COLORS.length];
-    html += '<div style="border-left:3px solid ' + borderColor + ';padding-left:8px;margin-bottom:' + (idx < positions.length-1 ? '12px' : '0') + '">' +
-      '<div style="font-size:11px;color:' + borderColor + ';font-weight:600;margin-bottom:4px">#' + (idx+1) + ' ' + p.ticket + ' &mdash; ' + (isBuy ? 'BUY' : 'SELL') + ' ' + Number(p.volume).toFixed(2) + ' lot</div>' +
-      '<div class="tv-pos-row"><span class="k">Entry</span><span class="v">' + p.open_price + '</span></div>' +
-      '<div class="tv-pos-row"><span class="k">Live ' + (isBuy ? 'Bid' : 'Ask') + '</span><span class="v" style="color:' + liveColor + '">' + live + '</span></div>' +
-      '<div class="tv-pos-row"><span class="k">Jarak</span><span class="v">' + (p.dist !== undefined && p.dist !== null ? (p.dist >= 0 ? '+' : '') + p.dist : '-') + '</span></div>' +
-      '<div class="tv-pos-row"><span class="k">SL</span><span class="v">' + (p.sl || '-') + '</span></div>' +
-      '<div class="tv-pos-row"><span class="k">TP</span><span class="v">' + (p.tp ? p.tp : (p.fast_tp ? 'engine $' + Number(p.fast_tp).toFixed(2) : '-')) + '</span></div>' +
-      '<div class="tv-pos-row"><span class="k">Waktu</span><span class="v">' + (p.open_time || '-') + '</span></div>' +
-      '<div class="tv-pnl"><span class="pnl-lbl">PnL</span><span class="pnl-val" style="color:' + pnlColor + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</span></div>' +
-      '<div style="margin-top:6px"><button onclick="closeTVPosition(' + p.ticket + ')" style="width:100%;padding:5px 0;background:#dc2626;color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:11px;font-weight:600">Close #' + p.ticket + '</button></div>' +
+    const tpTxt = p.tp ? p.tp : (p.fast_tp ? 'engine $' + Number(p.fast_tp).toFixed(2) : '-');
+    const distTxt = (p.dist !== undefined && p.dist !== null) ? ((p.dist >= 0 ? '+' : '') + p.dist) : '-';
+    html += '<div class="tv-pos-item" style="border-left-color:' + borderColor + '">' +
+      '<div class="tv-pos-head">' +
+        '<span style="color:' + borderColor + '">#' + (idx + 1) + '</span>' +
+        '<span class="v">' + p.ticket + '</span>' +
+        '<span style="color:' + (isBuy ? '#6ee7b7' : '#fca5a5') + '">' + (isBuy ? 'BUY' : 'SELL') + '</span>' +
+        '<span class="v">' + Number(p.volume).toFixed(2) + '</span>' +
+        '<span class="pi-pnl" style="color:' + pnlColor + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</span>' +
+        '<button class="tv-pos-close" title="Close #' + p.ticket + '" onclick="closeTVPosition(' + p.ticket + ')">&#10005;</button>' +
+      '</div>' +
+      '<div class="tv-pos-meta">E ' + p.open_price +
+        ' &middot; L <span style="color:' + liveColor + '">' + live + '</span>' +
+        ' &middot; J ' + distTxt +
+        ' &middot; SL ' + (p.sl || '-') +
+        ' &middot; TP ' + tpTxt +
+        ' &middot; ' + (p.open_time || '-') + '</div>' +
       '</div>';
   });
-  // Total PnL
-  const totalColor = totalPnl >= 0 ? '#6ee7b7' : '#fca5a5';
-  html = '<div style="padding:6px 8px;margin-bottom:8px;background:rgba(99,102,241,0.1);border-radius:6px;font-size:12px">' +
-    '<span style="color:#94a3b8">Total PnL: </span><span style="color:' + totalColor + ';font-weight:700">' + (totalPnl >= 0 ? '+' : '') + '$' + totalPnl.toFixed(2) + '</span>' +
-    '</div>' + html;
   // Legend
-  html += '<div style="margin-top:8px;font-size:10px;color:#94a3b8;border-top:1px solid #1e293b;padding-top:6px">' +
+  html += '<div style="margin-top:4px;font-size:10px;color:#94a3b8;border-top:1px solid #1e293b;padding-top:6px">' +
     '<span style="color:#60a5fa">---</span> #1 Entry ' +
     (positions.length > 1 ? '<span style="color:#a78bfa">---</span> #2 Entry ' : '') +
     '<span style="color:#ef4444">---</span> SL ' +
