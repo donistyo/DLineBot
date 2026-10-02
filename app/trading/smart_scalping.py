@@ -261,6 +261,36 @@ class SmartScalpingEngine:
                                     if tests >= 16:
                                         momentum["direction"] = "NEUTRAL"
                                         momentum["trend_override"] = "M1_RESISTANCE_TESTED_BUY"
+
+                                # ============================================
+                                # LAYER 4: ENTRY QUALITY (utk gate premium)
+                                # rng_pos_m1: posisi harga dlm range 5 bar M1
+                                #   terakhir (0-1). Terlalu tinggi = beli di
+                                #   puncak micro-range (loser 30 Sep 07:55: 89%).
+                                # chase3_m1: gerak searah sinyal 3 bar terakhir
+                                #   dalam satuan ATR M5 (kejar-kejaran).
+                                # Kalibrasi 30 hari: rng<=0.75 & chase<=0.5
+                                #   -> SL 32%->27%, EV +0.65->+1.0+.
+                                # ============================================
+                                _w5 = m1_df.tail(5)
+                                _r_hi = float(_w5["high"].max())
+                                _r_lo = float(_w5["low"].min())
+                                if _r_hi > _r_lo:
+                                    if momentum["direction"] == "BUY":
+                                        momentum["rng_pos_m1"] = (m1_close - _r_lo) / (_r_hi - _r_lo)
+                                    else:
+                                        momentum["rng_pos_m1"] = (_r_hi - m1_close) / (_r_hi - _r_lo)
+                                    try:
+                                        _m5 = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M5, 0, 16)
+                                        _m5_atr = float((_m5["high"] - _m5["low"])[-14:].mean()) if _m5 is not None and len(_m5) >= 14 else 0.0
+                                    except Exception:
+                                        _m5_atr = 0.0
+                                    if _m5_atr > 0:
+                                        _c3 = float(m1_df["close"].iloc[-4])
+                                        if momentum["direction"] == "BUY":
+                                            momentum["chase3_m1"] = (m1_close - _c3) / _m5_atr
+                                        else:
+                                            momentum["chase3_m1"] = (_c3 - m1_close) / _m5_atr
                 except Exception:
                     pass
 
