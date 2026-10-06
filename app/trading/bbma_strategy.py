@@ -35,13 +35,190 @@ from ta.volatility import BollingerBands
 #   released  = sinyal hilang saat menahan (radius lewat / trend dll)
 # =====================================
 GATE_LOG_PATH = os.path.join("runtime", "bbma_gate_log.jsonl")
+CSAK_LOG_PATH = os.path.join("runtime", "bbma_csak_log.jsonl")
 
 _gate_state = {}
 
 
 def reset_gate_state():
-    """Bersihkan state gate (dipakai test & restart)."""
+    """Bersihkan state gate + CSAK (dipakai test & restart)."""
     _gate_state.clear()
+    reset_csak_state()
+
+
+# =====================================================================
+# Gate tambahan CSAK + Momentum (flag bbma_csak_mode, default 0 = off)
+#   1. CSAK: candle TERTUTUP (iloc[-2]) yang close-nya menembus MA5,
+#      MA10, DAN mid BB searah tren, DAN candle tertutup sebelumnya
+#      (iloc[-3]) BELUM memenuhi syarat arah sama -> "pertama".
+#      State CSAK bertahan bbma_csak_expire_bars bar (re-entry terjadi
+#      beberapa bar setelah CSAK - gate CSAK tidak boleh hilang saat
+#      harga pullback ke mid BB).
+#   2. Momentum: candle TERTUTUP close di luar BB, searah CSAK
+#      (bukan wick; bukan union BUY/SELL seperti impulse lama).
+# Jalur lama (impulse = wick sentuh BB) TIDAK diganti selama
+# bbma_csak_mode = 0 - dipakai untuk perbandingan lewat log.
+# =====================================================================
+_csak_state = {"dir": None, "ref": None, "count": 0}
+
+
+def reset_csak_state():
+    _csak_state["dir"] = None
+    _csak_state["ref"] = None
+    _csak_state["count"] = 0
+
+
+def _log_csak(evt):
+    if not CSAK_LOG_PATH:
+        return
+    try:
+        with open(CSAK_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(evt, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _csak_detect(df):
+    """CSAK (Candlestick Arah Kukuh): candle TERTUTUP (iloc[-2]) yang close-nya
+    menembus MA5, MA10, DAN mid BB searah tren, DAN candle tertutup sebelum
+    itu (iloc[-3]) BELUM memenuhi syarat arah yang sama -> "pertama".
+    Syarat "pertama" ini mencegah re-trigger tiap bar selama trend panjang.
+
+    Return: (direction, hanya_bar_index) atau ("NEUTRAL", None)
+    """
+    if len(df) < 3:
+        return "NEUTRAL", None
+
+    def _breaks(row, up):
+        c, ma5, ma10, mid = row["close"], row["ma5"], row["ma10"], row["bb_mid"]
+        if any(pd.isna(x) for x in (ma5, ma10, mid)):
+            return False
+        body_up = c > row["open"]
+        body_dn = c < row["open"]
+        if up:
+            return bool(body_up and c > ma5 and c > ma10 and c > mid)
+        return bool(body_dn and c < ma5 and c < ma10 and c < mid)
+
+    closed = df.iloc[-2]
+    prev = df.iloc[-3]
+
+    if _breaks(closed, True) and not _breaks(prev, True):
+        return "BUY", int(df.index[-2])
+    if _breaks(closed, False) and not _breaks(prev, False):
+        return "SELL", int(df.index[-2])
+    return "NEUTRAL", None
+
+
+def _momentum_close_bb(df, direction):
+    """Momentum versi CSAK mode: candle TERTUTUP close di luar BB, searah
+    direction. Lebih ketat dari impulse lama (wick menyentuh BB, union
+    BUY/SELL): wajib CLOSE (bukan wick) dan WAJIB searah CSAK.
+    """
+    if direction not in ("BUY", "SELL") or len(df) < 2:
+        return False
+    closed = df.iloc[-2]
+    if pd.isna(closed["bb_up"]) or pd.isna(closed["bb_low"]):
+        return False
+    if direction == "BUY":
+        return bool(closed["close"] > closed["bb_up"])
+    return bool(closed["close"] < closed["bb_low"])
+
+
+def _csak_state_update(fresh_dir, fresh_idx):
+    """Update state CSAK dari hasil deteksi bar tertutup terakhir.
+
+    - CSAK baru terdeteksi (arah/ref berubah) -> state di-reset ke bar tsb.
+    - Deteksi NEUTRAL saat state aktif -> hitung umur; lewat expire -> released.
+    """
+    exp = int(_cfg("bbma_csak_expire_bars", 20))
+    if fresh_dir in ("BUY", "SELL"):
+        if _csak_state["dir"] != fresh_dir or _csak_state["ref"] != fresh_idx:
+            _csak_state["dir"] = fresh_dir
+            _csak_state["ref"] = fresh_idx
+            _csak_state["count"] = 0
+            _log_csak({
+                "t": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "event": "csak_detected",
+                "dir": fresh_dir,
+                "ref": fresh_idx,
+            })
+    else:
+        if _csak_state["dir"] is not None:
+            _csak_state["count"] += 1
+            if _csak_state["count"] > exp:
+                expired = _csak_state["dir"]
+                _csak_state["dir"] = None
+                _csak_state["ref"] = None
+                _csak_state["count"] = 0
+                _log_csak({
+                    "t": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "event": "csak_expired",
+                    "dir": expired,
+                    "expired_after": exp,
+                })
+
+
+def _csak_state_eff():
+    """Arah CSAK efektif + umur (closed bar sejak deteksi)."""
+    if _csak_state["dir"] in ("BUY", "SELL"):
+        return _csak_state["dir"], int(_csak_state["count"])
+    return "NEUTRAL", None
+
+
+def _csak_momentum_gate(m5, direction, out):
+    """Gate tambahan CSAK+Momentum. Mengisi out (csak_dir/csak_block/reason)
+    dan return (impulse, out). Dipanggil hanya bila bbma_csak_mode > 0.
+    """
+    fresh_dir, fresh_idx = _csak_detect(m5)
+    _csak_state_update(fresh_dir, fresh_idx)
+    dir_eff, age = _csak_state_eff()
+    out["csak_dir"] = fresh_dir
+    out["csak_dir_eff"] = dir_eff
+    out["csak_age"] = age
+
+    if dir_eff != direction:
+        out["reason"] = (
+            f"BBMA CSAK: belum ada candle tertutup close menembus "
+            f"MA5/MA10/MidBB searah {direction} "
+            f"(CSAK terbaru={fresh_dir}, state={dir_eff}) - tunggu"
+        )
+        out["csak_block"] = "no_csak"
+        _log_csak({
+            "t": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "event": "no_csak",
+            "dir_wanted": direction,
+            "fresh": fresh_dir,
+            "eff": dir_eff,
+        })
+        return False, out
+
+    momentum_ok = _momentum_close_bb(m5, direction)
+    out["momentum_close_bb"] = momentum_ok
+    if not momentum_ok:
+        out["reason"] = (
+            f"BBMA Momentum: candle tertutup belum close di luar BB "
+            f"searah {direction} (CSAK OK, state {age} bar) - "
+            f"tunggu konfirmasi momentum"
+        )
+        out["csak_block"] = "no_momentum"
+        _log_csak({
+            "t": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "event": "no_momentum",
+            "dir": direction,
+            "csak_age": age,
+        })
+        return False, out
+
+    out["csak_block"] = None
+    out["csak_trigger"] = True
+    _log_csak({
+        "t": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "event": "momentum_ok",
+        "dir": direction,
+        "csak_age": age,
+        "ref": _csak_state["ref"],
+    })
+    return True, out
 
 
 def _log_gate(evt):
@@ -465,16 +642,25 @@ def analyze_from_df(df_m5, df_m15):
             out["slope_strength"] = round(float(slope5), 4)
             out["dist_mid_atr"] = round(float(dist_mid_atr), 3)
 
+            # Gate tambahan CSAK+Momentum (bbma_csak_mode > 0).
+            # Mengganti impulse lama HANYA di mode ini; jalur lama
+            # (bbma_csak_mode = 0 / default) tidak berubah sama sekali.
+            if _cfg("bbma_csak_mode", 0) > 0:
+                impulse, out = _csak_momentum_gate(m5, direction, out)
+
             if dist_mid_atr > anti_chase_atr:
                 out["reason"] = (
                     f"BBMA anti-chase: harga {dist_mid_atr:.1f}xATR dari mid BB "
                     f"(>{anti_chase_atr:.1f}) - tunggu pullback"
                 )
             elif not impulse:
-                out["reason"] = (
-                    f"BBMA: belum ada impulse {direction} menyentuh BB "
-                    f"dalam {impulse_bars} bar terakhir - tunggu momentum dulu"
-                )
+                # CSAK mode sudah menulis reason spesifik (no_csak/no_momentum)
+                # -> jangan ditimpa reason impulse generik.
+                if not out.get("csak_block"):
+                    out["reason"] = (
+                        f"BBMA: belum ada impulse {direction} menyentuh BB "
+                        f"dalam {impulse_bars} bar terakhir - tunggu momentum dulu"
+                    )
             elif dist_mid_atr > reentry_atr:
                 out["impulse"] = True
                 out["reason"] = (

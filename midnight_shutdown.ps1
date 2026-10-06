@@ -1,4 +1,4 @@
-$log = "D:\Project\Wedd\DLineBot\logs\midnight_shutdown.log"
+$log = "C:\Users\ADSS\AI-XAU-BOT\logs\midnight_shutdown.log"
 function Log($m) { "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $m" | Add-Content -Path $log }
 
 Log "=== Shutdown sequence dimulai ==="

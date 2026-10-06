@@ -24,7 +24,7 @@ class DecisionEngine:
         slope_strength/dist_mid_atr terkumpul 1-2 minggu.
         """
         if scalp_result is None:
-            return {"action": "NO_TRADE", "reason": "Data tidak tersedia", "confidence": 0}
+            return {"action": "NO_TRADE", "reason": "Data tidak tersedia", "confidence": 0, "checks": []}
         bbma = scalp_result.get("bbma")
         if not isinstance(bbma, dict):
             return {
@@ -33,6 +33,7 @@ class DecisionEngine:
                 "confidence": 0,
                 "score": 0,
                 "grade": "-",
+                "checks": []
             }
 
         direction = bbma.get("direction", "NEUTRAL")
@@ -50,12 +51,28 @@ class DecisionEngine:
             "confirm_hold_cycles": bbma.get("confirm_hold_cycles"),
         }
 
-        if direction not in ("BUY", "SELL"):
+        checks = []
+
+        def _bbma_fail(label, reason, detail=None):
+            checks.append({"label": label, "ok": False,
+                           "detail": detail if detail is not None else reason})
             return {
                 "action": "NO_TRADE",
-                "reason": bbma.get("reason") or "BBMA: arah netral",
+                "reason": reason,
                 **base,
+                "checks": checks,
             }
+
+        def _bbma_ok(label, detail=None):
+            checks.append({"label": label, "ok": True, "detail": detail})
+
+        if direction not in ("BUY", "SELL"):
+            return _bbma_fail(
+                "BBMA arah",
+                bbma.get("reason") or "BBMA: arah netral",
+                f"direction={direction}"
+            )
+        _bbma_ok("BBMA arah", direction)
 
         # Defense-in-depth: anti-chase (analyze sudah cek, cek ulang di sini)
         try:
@@ -64,18 +81,20 @@ class DecisionEngine:
         except Exception:
             _anti = 2.0
         if dist is not None and float(dist) > _anti:
-            return {
-                "action": "NO_TRADE",
-                "reason": f"BBMA anti-chase: harga {float(dist):.1f}xATR dari mid BB (>{_anti:.1f})",
-                **base,
-            }
+            return _bbma_fail(
+                "BBMA anti-chase",
+                f"BBMA anti-chase: harga {float(dist):.1f}xATR dari mid BB (>{_anti:.1f})",
+                f"{float(dist):.1f} > {_anti:.1f} ATR"
+            )
+        _bbma_ok("BBMA anti-chase", f"{dist} ATR dari mid BB (max {_anti:.1f})")
 
         if not bbma.get("trigger"):
-            return {
-                "action": "NO_TRADE",
-                "reason": bbma.get("reason") or "BBMA: reentry belum valid",
-                **base,
-            }
+            return _bbma_fail(
+                "BBMA reentry trigger",
+                bbma.get("reason") or "BBMA: reentry belum valid",
+                "trigger belum valid"
+            )
+        _bbma_ok("BBMA reentry trigger", bbma.get("reason") or "trigger valid")
 
         return {
             "action": direction,
@@ -83,6 +102,7 @@ class DecisionEngine:
             **base,
             "entry_layers": 2,
             "tier_reason": f"BBMA fixed dual (slope {slope}, dist {dist} ATR)",
+            "checks": checks,
         }
 
     def decide(self, prediction=None, scalp_result=None, regime=None, higher_trend=None, higher_adx=0) -> dict:
@@ -90,12 +110,34 @@ class DecisionEngine:
             return self._decide_bbma(scalp_result)
 
         if scalp_result is None or regime is None:
-            return {"action": "NO_TRADE", "reason": "Data tidak tersedia", "confidence": 0}
+            return {"action": "NO_TRADE", "reason": "Data tidak tersedia", "confidence": 0, "checks": []}
 
         score_data = scalp_result.get("scalp_score", {})
         score = score_data.get("score", 0)
         direction = score_data.get("direction", "NEUTRAL")
         grade = score_data.get("grade", "D")
+
+        # =====================================
+        # Trace tiap guard: setiap guard yang
+        # dievaluasi dicatat (lolos/gagal) agar
+        # entry checklist di dashboard bisa
+        # menampilkan status per guard.
+        # =====================================
+        checks = []
+
+        def _ck(label, ok, detail=None):
+            checks.append({"label": label, "ok": bool(ok), "detail": detail})
+
+        def _reject(label, reason, detail=None):
+            _ck(label, False, detail if detail is not None else reason)
+            return {
+                "action": "NO_TRADE",
+                "reason": reason,
+                "confidence": score / 100,
+                "score": score,
+                "grade": grade,
+                "checks": checks
+            }
 
         # =====================================
         # Satu sumber kebenaran kekuatan trend.
@@ -122,21 +164,18 @@ class DecisionEngine:
             pass
         if rsi_val is not None and rsi_val > 0:
             if direction == "BUY" and rsi_val > 75:
-                return {
-                    "action": "NO_TRADE",
-                    "reason": f"RSI overbought ({rsi_val:.1f} > 75) - jangan beli di puncak",
-                    "confidence": score / 100,
-                    "score": score,
-                    "grade": grade
-                }
+                return _reject(
+                    "RSI",
+                    f"RSI overbought ({rsi_val:.1f} > 75) - jangan beli di puncak",
+                    f"RSI {rsi_val:.1f}"
+                )
             if direction == "SELL" and rsi_val < 25:
-                return {
-                    "action": "NO_TRADE",
-                    "reason": f"RSI oversold ({rsi_val:.1f} < 25) - jangan jual di lembah",
-                    "confidence": score / 100,
-                    "score": score,
-                    "grade": grade
-                }
+                return _reject(
+                    "RSI",
+                    f"RSI oversold ({rsi_val:.1f} < 25) - jangan jual di lembah",
+                    f"RSI {rsi_val:.1f}"
+                )
+            _ck("RSI", True, f"RSI {rsi_val:.1f}")
 
         # =====================================
         # N-bar return cap: blokir entry jika
@@ -157,13 +196,12 @@ class DecisionEngine:
                 _recent_move = abs(float(scalp_result.get("close", 0) or 0) - _closes[-1])
                 _move_atr = _recent_move / max(_atr_n, 0.01)
                 if _move_atr > 2.5:
-                    return {
-                        "action": "NO_TRADE",
-                        "reason": f"Harga sudah bergerak {_move_atr:.1f}xATR dalam 10 bar - terlalu jauh untuk entry",
-                        "confidence": score / 100,
-                        "score": score,
-                        "grade": grade
-                    }
+                    return _reject(
+                        "10-bar move",
+                        f"Harga sudah bergerak {_move_atr:.1f}xATR dalam 10 bar - terlalu jauh untuk entry",
+                        f"{_move_atr:.1f}xATR > 2.5"
+                    )
+                _ck("10-bar move", True, f"{_move_atr:.1f}xATR dari 10 bar")
         except Exception:
             pass
 
@@ -185,22 +223,20 @@ class DecisionEngine:
                 _guard_mult = 0.7
 
         if score < self.min_scalp_score:
-            return {
-                "action": "NO_TRADE",
-                "reason": f"Scalp score terlalu rendah ({score}/100, {grade})",
-                "confidence": score / 100,
-                "score": score,
-                "grade": grade
-            }
+            return _reject(
+                "Skor scalp",
+                f"Scalp score terlalu rendah ({score}/100, {grade})",
+                f"{score}/100 {grade} < {self.min_scalp_score}"
+            )
+        _ck("Skor scalp", True, f"{score}/100 {grade}")
 
         if direction in ("NEUTRAL", "WAIT"):
-            return {
-                "action": "NO_TRADE",
-                "reason": f"Scalp arah netral ({score}/100, {grade})",
-                "confidence": score / 100,
-                "score": score,
-                "grade": grade
-            }
+            return _reject(
+                "Arah scalp",
+                f"Scalp arah netral ({score}/100, {grade})",
+                f"direction={direction}"
+            )
+        _ck("Arah scalp", True, direction)
 
         momentum = {}
         if scalp_result:
@@ -217,13 +253,12 @@ class DecisionEngine:
              and accel >= 0.5)
         )
         if accel_opposing:
-            return {
-                "action": "NO_TRADE",
-                "reason": f"Momentum candle terakhir melawan ({last_body}, akselerasi {accel:.2f}) - rawan gerakan tajam",
-                "confidence": score / 100,
-                "score": score,
-                "grade": grade
-            }
+            return _reject(
+                "Momentum candle",
+                f"Momentum candle terakhir melawan ({last_body}, akselerasi {accel:.2f}) - rawan gerakan tajam",
+                f"{last_body} accel {accel:.2f}"
+            )
+        _ck("Momentum candle", True, f"{last_body} accel {accel:.2f}")
 
         # =====================================
         # Momentum filter: tolak entry jika arah
@@ -236,14 +271,13 @@ class DecisionEngine:
         # =====================================
         mom_dir = momentum.get("direction", "NEUTRAL")
         if mom_dir in ("BUY", "SELL") and mom_dir != direction:
-            return {
-                "action": "NO_TRADE",
-                "reason": f"Momentum {momentum.get('tf', 'M5')} {mom_dir} melawan sinyal {direction} "
-                          f"({momentum.get('bull_bodies', 0)}U/{momentum.get('bear_bodies', 0)}D) - tunggu searah",
-                "confidence": score / 100,
-                "score": score,
-                "grade": grade
-            }
+            return _reject(
+                "Momentum HTF",
+                f"Momentum {momentum.get('tf', 'M5')} {mom_dir} melawan sinyal {direction} "
+                f"({momentum.get('bull_bodies', 0)}U/{momentum.get('bear_bodies', 0)}D) - tunggu searah",
+                f"{momentum.get('tf', 'M5')} {mom_dir} vs {direction}"
+            )
+        _ck("Momentum HTF", True, f"{momentum.get('tf', 'M5')} {mom_dir}")
 
         # =====================================
         # Wick rejection: blokir entry saat candle terakhir
@@ -265,21 +299,18 @@ class DecisionEngine:
 
         if body > 0:
             if direction == "BUY" and upper_wick >= wick_mult * body:
-                return {
-                    "action": "NO_TRADE",
-                    "reason": f"Wick atas {upper_wick:.2f} >= {wick_mult:.0f}x body {body:.2f} - candle rejection atas, rawan kejar puncak",
-                    "confidence": score / 100,
-                    "score": score,
-                    "grade": grade
-                }
+                return _reject(
+                    "Wick rejection",
+                    f"Wick atas {upper_wick:.2f} >= {wick_mult:.0f}x body {body:.2f} - candle rejection atas, rawan kejar puncak",
+                    f"wick atas {upper_wick:.2f} vs {wick_mult:.0f}x{body:.2f}"
+                )
             if direction == "SELL" and lower_wick >= wick_mult * body:
-                return {
-                    "action": "NO_TRADE",
-                    "reason": f"Wick bawah {lower_wick:.2f} >= {wick_mult:.0f}x body {body:.2f} - candle rejection bawah, rawan kejar lembah",
-                    "confidence": score / 100,
-                    "score": score,
-                    "grade": grade
-                }
+                return _reject(
+                    "Wick rejection",
+                    f"Wick bawah {lower_wick:.2f} >= {wick_mult:.0f}x body {body:.2f} - candle rejection bawah, rawan kejar lembah",
+                    f"wick bawah {lower_wick:.2f} vs {wick_mult:.0f}x{body:.2f}"
+                )
+            _ck("Wick rejection", True, f"body {body:.2f} (mult {wick_mult:.1f})")
 
         # =====================================
         # Extension guard: harga sudah jauh/extended dari range terbaru
@@ -291,24 +322,22 @@ class DecisionEngine:
             _ext_thresh = 1.0 * _guard_mult
             if _ext_thresh < 1.0:
                 if _ext_thresh > 0:
-                    return {
-                        "action": "NO_TRADE",
-                        "reason": f"Harga extended di atas range + strong trend (ADX {adx:.0f}) - threshold diturunkan {int(_guard_mult*100)}%",
-                        "confidence": score / 100,
-                        "score": score,
-                        "grade": grade
-                    }
+                    return _reject(
+                        "Extension range",
+                        f"Harga extended di atas range + strong trend (ADX {adx:.0f}) - threshold diturunkan {int(_guard_mult*100)}%",
+                        f"extended_up, thresh {_ext_thresh:.2f}"
+                    )
         if direction == "SELL" and liquidity.get("extended_down"):
             _ext_thresh = 1.0 * _guard_mult
             if _ext_thresh < 1.0:
                 if _ext_thresh > 0:
-                    return {
-                        "action": "NO_TRADE",
-                        "reason": f"Harga extended di bawah range + strong trend (ADX {adx:.0f}) - threshold diturunkan {int(_guard_mult*100)}%",
-                        "confidence": score / 100,
-                        "score": score,
-                        "grade": grade
-                    }
+                    return _reject(
+                        "Extension range",
+                        f"Harga extended di bawah range + strong trend (ADX {adx:.0f}) - threshold diturunkan {int(_guard_mult*100)}%",
+                        f"extended_down, thresh {_ext_thresh:.2f}"
+                    )
+        _ck("Extension range", True,
+            f"extended_up={bool(liquidity.get('extended_up'))} extended_down={bool(liquidity.get('extended_down'))}")
 
         # =====================================
         # Exhaustion guard: kalau harga sudah
@@ -341,17 +370,18 @@ class DecisionEngine:
                 dist_atr = abs(_ema_ref - ema50) / max(_last_atr, 0.01)
                 _exh_thresh = 3.0 * _guard_mult
                 if direction == "BUY" and dist_atr >= _exh_thresh:
-                    return {
-                        "action": "NO_TRADE",
-                        "reason": f"Buy extended {dist_atr:.1f}xATR dari EMA50 (threshold {_exh_thresh:.1f}) - rawan kejar puncak",
-                        "confidence": score / 100, "score": score, "grade": grade
-                    }
+                    return _reject(
+                        "Exhaustion EMA50",
+                        f"Buy extended {dist_atr:.1f}xATR dari EMA50 (threshold {_exh_thresh:.1f}) - rawan kejar puncak",
+                        f"{dist_atr:.1f}xATR >= {_exh_thresh:.1f}"
+                    )
                 if direction == "SELL" and dist_atr >= _exh_thresh:
-                    return {
-                        "action": "NO_TRADE",
-                        "reason": f"Sell extended {dist_atr:.1f}xATR dari EMA50 (threshold {_exh_thresh:.1f}) - rawan kejar lembah",
-                        "confidence": score / 100, "score": score, "grade": grade
-                    }
+                    return _reject(
+                        "Exhaustion EMA50",
+                        f"Sell extended {dist_atr:.1f}xATR dari EMA50 (threshold {_exh_thresh:.1f}) - rawan kejar lembah",
+                        f"{dist_atr:.1f}xATR >= {_exh_thresh:.1f}"
+                    )
+                _ck("Exhaustion EMA50", True, f"{dist_atr:.1f}xATR (max {_exh_thresh:.1f})")
         except Exception:
             pass
 
@@ -374,13 +404,12 @@ class DecisionEngine:
                 _re_dist = abs(_re_close - _re_ema20) / max(_re_atr, 0.01)
                 if _re_dist > _re_max:
                     _side = "atas" if _re_close > _re_ema20 else "bawah"
-                    return {
-                        "action": "NO_TRADE",
-                        "reason": f"BBMA reentry: harga {_re_dist:.1f}xATR dari EMA20 ({_side}) - tunggu pullback ke MA",
-                        "confidence": score / 100,
-                        "score": score,
-                        "grade": grade
-                    }
+                    return _reject(
+                        "BBMA reentry",
+                        f"BBMA reentry: harga {_re_dist:.1f}xATR dari EMA20 ({_side}) - tunggu pullback ke MA",
+                        f"{_re_dist:.1f}xATR > {_re_max:.1f} ({_side})"
+                    )
+                _ck("BBMA reentry", True, f"{_re_dist:.1f}xATR dari EMA20 (max {_re_max:.1f})")
         except Exception:
             pass
 
@@ -402,19 +431,20 @@ class DecisionEngine:
             if _r_close > 0 and _r_low > 0 and _r_atr > 0:
                 _reb_thresh = _r_atr * 0.25 * _guard_mult
                 if direction == "SELL" and _r_close <= _r_low + _reb_thresh:
-                    return {
-                        "action": "NO_TRADE",
-                        "reason": f"Sell di dekat low range ({_r_close:.2f} <= low {_r_low:.2f} + {_reb_thresh:.2f} ATR) - rawan rebound naik",
-                        "confidence": score / 100, "score": score, "grade": grade
-                    }
+                    return _reject(
+                        "Rebound edge",
+                        f"Sell di dekat low range ({_r_close:.2f} <= low {_r_low:.2f} + {_reb_thresh:.2f} ATR) - rawan rebound naik",
+                        f"{_r_close:.2f} <= {_r_low:.2f}+{_reb_thresh:.2f}"
+                    )
             if _r_close > 0 and _r_high > 0 and _r_atr > 0:
                 _reb_thresh = _r_atr * 0.25 * _guard_mult
                 if direction == "BUY" and _r_close >= _r_high - _reb_thresh:
-                    return {
-                        "action": "NO_TRADE",
-                        "reason": f"Buy di dekat high range ({_r_close:.2f} >= high {_r_high:.2f} - {_reb_thresh:.2f} ATR) - rawan koreksi turun",
-                        "confidence": score / 100, "score": score, "grade": grade
-                    }
+                    return _reject(
+                        "Rebound edge",
+                        f"Buy di dekat high range ({_r_close:.2f} >= high {_r_high:.2f} - {_reb_thresh:.2f} ATR) - rawan koreksi turun",
+                        f"{_r_close:.2f} >= {_r_high:.2f}-{_reb_thresh:.2f}"
+                    )
+            _ck("Rebound edge", True, f"close {_r_close:.2f} tidak di tepi range")
         except Exception:
             pass
 
@@ -431,17 +461,18 @@ class DecisionEngine:
             if _rp_close > 0 and _rp_high > _rp_low:
                 _pos_pct = (_rp_close - _rp_low) / (_rp_high - _rp_low)
                 if direction == "SELL" and _pos_pct < 0.20:
-                    return {
-                        "action": "NO_TRADE",
-                        "reason": f"Harga di posisi rendah ({_pos_pct:.0%} dari range) - jangan SELL di dekat low",
-                        "confidence": score / 100, "score": score, "grade": grade
-                    }
+                    return _reject(
+                        "Posisi harga di range",
+                        f"Harga di posisi rendah ({_pos_pct:.0%} dari range) - jangan SELL di dekat low",
+                        f"{_pos_pct:.0%} < 20%"
+                    )
                 if direction == "BUY" and _pos_pct > 0.80:
-                    return {
-                        "action": "NO_TRADE",
-                        "reason": f"Harga di posisi tinggi ({_pos_pct:.0%} dari range) - jangan BUY di dekat high",
-                        "confidence": score / 100, "score": score, "grade": grade
-                    }
+                    return _reject(
+                        "Posisi harga di range",
+                        f"Harga di posisi tinggi ({_pos_pct:.0%} dari range) - jangan BUY di dekat high",
+                        f"{_pos_pct:.0%} > 80%"
+                    )
+                _ck("Posisi harga di range", True, f"{_pos_pct:.0%} dari range")
         except Exception:
             pass
 
@@ -455,11 +486,12 @@ class DecisionEngine:
             m1 = (scalp_result or {}).get("m1_momentum") or {}
             m1_dir = m1.get("direction")
             if m1_dir in ("BUY", "SELL") and m1_dir != direction:
-                return {
-                    "action": "NO_TRADE",
-                    "reason": f"M1 momentum {m1_dir} melawan sinyal {direction} - tunggu konfirmasi searah",
-                    "confidence": score / 100, "score": score, "grade": grade
-                }
+                return _reject(
+                    "M1 momentum",
+                    f"M1 momentum {m1_dir} melawan sinyal {direction} - tunggu konfirmasi searah",
+                    f"M1 {m1_dir} vs {direction}"
+                )
+            _ck("M1 momentum", True, f"M1 {m1_dir}")
         except Exception:
             pass
 
@@ -474,17 +506,19 @@ class DecisionEngine:
             _candles_bull = momentum.get("last_body", "") == "BUY" and momentum.get("bull_bodies", 0) >= 2
             _candles_bear = momentum.get("last_body", "") == "SELL" and momentum.get("bear_bodies", 0) >= 2
             if direction == "SELL" and _candles_bull:
-                return {
-                    "action": "NO_TRADE",
-                    "reason": f"2 candle terakhir bullish ({momentum.get('bull_bodies',0)}U/{momentum.get('bear_bodies',0)}D) - jangan SELL saat harga naik",
-                    "confidence": score / 100, "score": score, "grade": grade
-                }
+                return _reject(
+                    "2 candle terakhir",
+                    f"2 candle terakhir bullish ({momentum.get('bull_bodies',0)}U/{momentum.get('bear_bodies',0)}D) - jangan SELL saat harga naik",
+                    f"{momentum.get('bull_bodies',0)}U/{momentum.get('bear_bodies',0)}D"
+                )
             if direction == "BUY" and _candles_bear:
-                return {
-                    "action": "NO_TRADE",
-                    "reason": f"2 candle terakhir bearish ({momentum.get('bull_bodies',0)}U/{momentum.get('bear_bodies',0)}D) - jangan BUY saat harga turun",
-                    "confidence": score / 100, "score": score, "grade": grade
-                }
+                return _reject(
+                    "2 candle terakhir",
+                    f"2 candle terakhir bearish ({momentum.get('bull_bodies',0)}U/{momentum.get('bear_bodies',0)}D) - jangan BUY saat harga turun",
+                    f"{momentum.get('bull_bodies',0)}U/{momentum.get('bear_bodies',0)}D"
+                )
+            _ck("2 candle terakhir", True,
+                f"{momentum.get('bull_bodies',0)}U/{momentum.get('bear_bodies',0)}D body {momentum.get('last_body', 'NEUT')}")
         except Exception:
             pass
 
@@ -499,32 +533,30 @@ class DecisionEngine:
             # salah/tidak valid -> jangan blokir entry yang searah trend.
             ai_aligned_trend = (higher_trend in ("BUY", "SELL")) and (ai_signal == higher_trend)
             if ai_aligned_trend and ai_conf >= 0.55 and direction != ai_signal:
-                return {
-                    "action": "NO_TRADE",
-                    "reason": f"Scalp {direction} vs AI {ai_signal} ({ai_conf:.0%}) - berlawanan arah",
-                    "confidence": score / 100,
-                    "score": score,
-                    "grade": grade
-                }
+                return _reject(
+                    "AI vs trend M5/M15",
+                    f"Scalp {direction} vs AI {ai_signal} ({ai_conf:.0%}) - berlawanan arah",
+                    f"scalp {direction} vs AI {ai_signal} {ai_conf:.0%}"
+                )
+            _ck("AI vs trend M5/M15", True,
+                f"AI {ai_signal} {ai_conf:.0%} vs scalp {direction}")
 
         if expected_dir is None:
             if score < self.min_scalp_score + self.sideways_penalty:
-                return {
-                    "action": "NO_TRADE",
-                    "reason": f"Trend SIDEWAYS, butuh skor >= {self.min_scalp_score + self.sideways_penalty} (dapat {score}/100 {grade})",
-                    "confidence": score / 100,
-                    "score": score,
-                    "grade": grade
-                }
+                return _reject(
+                    "Skor saat SIDEWAYS",
+                    f"Trend SIDEWAYS, butuh skor >= {self.min_scalp_score + self.sideways_penalty} (dapat {score}/100 {grade})",
+                    f"{score}/100 < {self.min_scalp_score + self.sideways_penalty}"
+                )
+            _ck("Skor saat SIDEWAYS", True, f"{score}/100 >= {self.min_scalp_score + self.sideways_penalty}")
 
         if expected_dir and direction != expected_dir:
-            return {
-                "action": "NO_TRADE",
-                "reason": f"Scalp {direction} tidak searah trend {trend} - tunggu sinyal stabil",
-                "confidence": score / 100,
-                "score": score,
-                "grade": grade
-            }
+            return _reject(
+                "Searah trend",
+                f"Scalp {direction} tidak searah trend {trend} - tunggu sinyal stabil",
+                f"{direction} vs trend {trend}"
+            )
+        _ck("Searah trend", True, f"{direction} searah {trend}")
 
         # Audit: posisi harga dalam range (untuk signal_history)
         _audit_pos = None
@@ -597,12 +629,11 @@ class DecisionEngine:
 
         _guard = momentum.get("trend_override")
         if _guard:
-            return {
-                "action": "NO_TRADE",
-                "reason": f"Guard trend aktif ({_guard}) - entry diblokir.",
-                "confidence": score / 100,
-                "score": score,
-                "grade": grade,
+            return _reject(
+                "Guard trend_override",
+                f"Guard trend aktif ({_guard}) - entry diblokir.",
+                f"trend_override {_guard}"
+            ) | {
                 "pos_pct": _audit_pos,
                 "entry_layers": 2,
                 "tier_reason": f"guard aktif: {_guard}"
@@ -616,5 +647,6 @@ class DecisionEngine:
             "grade": grade,
             "pos_pct": _audit_pos,
             "entry_layers": _entry_layers,
-            "tier_reason": _tier_reason
+            "tier_reason": _tier_reason,
+            "checks": checks
         }

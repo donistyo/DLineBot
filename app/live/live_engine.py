@@ -1265,9 +1265,16 @@ class LiveEngine:
             else:
                 _tf_ok = bool(tf_confirmation.get("allowed", False)) if tf_confirmation else True
 
+            _floor_ok, _equity_now, _floor_val = self._equity_floor_state()
+
+            open_tickets = {p.ticket for p in positions} if positions else set()
+            session_result = self.session_manager.allow(open_tickets)
+
             can_trade = (
 
                 self._auto_trade_enabled
+
+                and _floor_ok
 
                 and decision["action"] != "NO_TRADE"
 
@@ -1287,16 +1294,9 @@ class LiveEngine:
 
                 and _atr_filter_ok
 
-            )
+                and session_result["allowed"]
 
-            if can_trade:
-                session_result = None
-                open_tickets = {p.ticket for p in positions} if positions else set()
-                session_result = self.session_manager.allow(open_tickets)
-                if not session_result["allowed"]:
-                    can_trade = False
-            else:
-                session_result = None
+            )
 
             self._write_entry_checklist(
                 can_trade=can_trade,
@@ -1445,6 +1445,16 @@ class LiveEngine:
 
                 }
 
+            elif not _floor_ok:
+
+                result = {
+
+                    "status": "BLOCKED",
+
+                    "reason": f"Equity floor: {_equity_now:.2f} <= floor {_floor_val:.0f} - tunggu pemulihan equity."
+
+                }
+
             elif not filter_result["allowed"]:
 
                 result = {
@@ -1537,6 +1547,16 @@ class LiveEngine:
                     "status": "BLOCKED",
 
                     "reason": _atr_filter_reason or "Filter volatilitas ATR menolak."
+
+                }
+
+            elif not can_trade:
+
+                result = {
+
+                    "status": "BLOCKED",
+
+                    "reason": "Gate can_trade gagal (cek entry checklist)."
 
                 }
 
@@ -1998,6 +2018,26 @@ class LiveEngine:
             return "scalp"
 
     # =====================================
+    # Equity floor: dipakai bersama oleh
+    # can_trade dan entry checklist supaya
+    # status yang tampil = gate yang dipakai.
+    # =====================================
+
+    def _equity_floor_state(self):
+        floor = 100.0
+        try:
+            with open("runtime/trade_config.json") as _f:
+                floor = float(json.load(_f).get("equity_floor", 100.0))
+        except Exception:
+            pass
+        try:
+            _account = self.account_manager.get_info()
+            _equity = float(_account.get("equity", 0))
+            return (_equity > floor), _equity, floor
+        except Exception:
+            return True, 0.0, floor
+
+    # =====================================
     # Entry Checklist (live menuju dashboard)
     # =====================================
 
@@ -2018,16 +2058,12 @@ class LiveEngine:
 
             _bbma_mode = self._entry_strategy() == "bbma"
 
-            equity_floor_ok = True
-            try:
-                _account = self.account_manager.get_info()
-                _equity = float(_account.get("equity", 0))
-                with open("runtime/trade_config.json") as _f:
-                    floor = float(json.load(_f).get("equity_floor", 100.0))
-                equity_floor_ok = _equity > floor
-            except Exception:
-                floor = 100.0
-            items.append(self._ck("Equity > floor", equity_floor_ok, f"Equity vs floor {floor:.0f}"))
+            equity_floor_ok, _equity_now, floor = self._equity_floor_state()
+            items.append(self._ck(
+                "Equity > floor",
+                equity_floor_ok,
+                f"Equity {_equity_now:.2f} vs floor {floor:.0f}"
+            ))
 
             if _bbma_mode:
                 _b = (scalp_result or {}).get("bbma") or {}
@@ -2121,12 +2157,24 @@ class LiveEngine:
                 session_reason = session_result.get("reason") or (None if session_ok else "Session tidak diizinkan")
             items.append(self._ck("Session aktif diizinkan", session_ok, session_reason))
 
+            guard_checks = decision.get("checks") or []
+            for g in guard_checks:
+                items.append(self._ck(
+                    f"Guard: {g.get('label', '-')}",
+                    g.get("ok", True),
+                    g.get("detail")
+                ))
+
             blocked_reason = None
             if not can_trade:
-                for it in items:
-                    if not it["ok"]:
-                        blocked_reason = it["label"] + ": " + (it["detail"] or "")
-                        break
+                _fail_guard = next((g for g in guard_checks if not g.get("ok")), None)
+                if action == "NO_TRADE" and _fail_guard:
+                    blocked_reason = "Guard " + str(_fail_guard.get("label", "-")) + ": " + (_fail_guard.get("detail") or "")
+                else:
+                    for it in items:
+                        if not it["ok"]:
+                            blocked_reason = it["label"] + ": " + (it["detail"] or "")
+                            break
                 if blocked_reason is None:
                     blocked_reason = decision.get("reason", "Diblok oleh engine lain")
 
