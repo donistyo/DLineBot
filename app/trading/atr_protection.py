@@ -32,6 +32,8 @@ class ATRProtectionManager:
         sl_plus_usd=0.0,
         sl_plus_buffer_usd=0.10,
         emergency_max_usd=0.0,
+        recover_red_usd=0.0,
+        recover_close_usd=0.0,
     ):
         self.sl_atr_mult = sl_atr_mult
         self.be_trigger_atr = be_trigger_atr
@@ -58,18 +60,22 @@ class ATRProtectionManager:
         self.sl_plus_usd = sl_plus_usd
         self.sl_plus_buffer_usd = sl_plus_buffer_usd
         self.emergency_max_usd = emergency_max_usd
+        self.recover_red_usd = recover_red_usd
+        self.recover_close_usd = recover_close_usd
 
         self.controller = PositionController()
         self._partial_done = set()
         self._peak_price = {}
         self._stall_start = {}
         self._ever_profit = set()
+        self._real_red = set()
 
     def cleanup(self, active_tickets):
         self._partial_done = {t for t in self._partial_done if t in active_tickets}
         self._peak_price = {t: p for t, p in self._peak_price.items() if t in active_tickets}
         self._stall_start = {t: s for t, s in self._stall_start.items() if t in active_tickets}
         self._ever_profit = {t for t in self._ever_profit if t in active_tickets}
+        self._real_red = {t for t in self._real_red if t in active_tickets}
 
     def attach_initial_sl(self, position, atr):
         dist = self.sl_atr_mult * atr
@@ -145,6 +151,24 @@ class ATRProtectionManager:
                 return {"status": "CLOSED", "action": "LOSER_EXIT",
                         "reason": f"Posisi belum pernah profit ({self.loser_min_profit:.2f}) "
                                   f"setelah {open_age / 60:.1f} menit -> close loss kecil.",
+                        "ticket": position.ticket, "result": result}
+
+        # ======================================
+        # RECOVERY CLOSE (R1): posisi pernah merah
+        # >= recover_red_usd (merah sungguhan, bukan noise spread)
+        # -> begitu balik profit >= recover_close_usd -> langsung close.
+        # ======================================
+        if self.recover_red_usd > 0 and self.recover_close_usd > 0:
+            if position.ticket not in self._real_red and position.profit <= -self.recover_red_usd:
+                self._real_red.add(position.ticket)
+            if (position.ticket in self._real_red
+                    and position.profit >= self.recover_close_usd):
+                _log_close("RECOVERY_CLOSE", position.ticket, position.symbol, position.profit)
+                result = self.controller.close(position, caller="RECOVERY_CLOSE")
+                return {"status": "CLOSED", "action": "RECOVERY",
+                        "reason": f"Posisi pernah merah (<= -{self.recover_red_usd:.2f} USD) "
+                                  f"dan balik profit {position.profit:.2f} >= {self.recover_close_usd:.2f} "
+                                  f"-> close aman.",
                         "ticket": position.ticket, "result": result}
 
         # ======================================

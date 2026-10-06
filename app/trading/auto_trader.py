@@ -51,11 +51,14 @@ def resolve_entry_copies(decision, fallback):
 
 
 def _save_signal_history(signal, price, sl, tp, score=0, grade="-", reason="", pos_pct=None, entry_layers=None, tier_reason=None,
-                         entry_strategy=None, bbma_slope=None, bbma_dist_mid=None):
+                         entry_strategy=None, bbma_slope=None, bbma_dist_mid=None,
+                         confirm_hold_s=None, confirm_hold_cycles=None):
     """Simpan history signal ke file untuk ditampilkan di chart.
 
     Field BBMA (entry_strategy/bbma_slope/bbma_dist_mid) dicatat di tiap
     entry untuk riset korelasi slope_strength/dist_mid_atr vs hasil trade.
+    confirm_hold_s/confirm_hold_cycles = lama gate konfirmasi candle
+    menahan sinyal sebelum entry (data premi asuransi c4).
 
     signal_history dibatasi 50 entri (tampilan chart) - untuk sampling
     1-2 minggu pakai bbma_history.json (append-only, tanpa batas).
@@ -79,6 +82,8 @@ def _save_signal_history(signal, price, sl, tp, score=0, grade="-", reason="", p
             "entry_strategy": entry_strategy,
             "bbma_slope": bbma_slope,
             "bbma_dist_mid": bbma_dist_mid,
+            "confirm_hold_s": confirm_hold_s,
+            "confirm_hold_cycles": confirm_hold_cycles,
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "timestamp": int(datetime.now().timestamp()),
         }
@@ -232,6 +237,8 @@ class AutoTrader:
                 entry_strategy=decision.get("entry_strategy"),
                 bbma_slope=decision.get("bbma_slope"),
                 bbma_dist_mid=decision.get("bbma_dist_mid"),
+                confirm_hold_s=decision.get("confirm_hold_s"),
+                confirm_hold_cycles=decision.get("confirm_hold_cycles"),
             )
             _send_tv_alert(
                 action=signal,

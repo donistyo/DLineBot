@@ -46,6 +46,8 @@ class DecisionEngine:
             "entry_strategy": "bbma",
             "bbma_slope": slope,
             "bbma_dist_mid": dist,
+            "confirm_hold_s": bbma.get("confirm_hold_s"),
+            "confirm_hold_cycles": bbma.get("confirm_hold_cycles"),
         }
 
         if direction not in ("BUY", "SELL"):

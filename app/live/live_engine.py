@@ -342,6 +342,8 @@ class LiveEngine:
             sl_plus_usd=float(get_trade_config("sl_plus_usd", 0.0)),
             sl_plus_buffer_usd=float(get_trade_config("sl_plus_buffer", 0.10)),
             emergency_max_usd=float(get_trade_config("emergency_max_usd", 0.0)),
+            recover_red_usd=float(get_trade_config("recover_red_usd", 1.0)),
+            recover_close_usd=float(get_trade_config("recover_close_usd", 0.25)),
         )
 
         self.break_even = BreakEvenManager(

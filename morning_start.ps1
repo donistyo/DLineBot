@@ -34,4 +34,14 @@ try {
     Log "ERROR enable autotrade: $($_.Exception.Message)"
 }
 
+$watchAlive = Get-Process python -ErrorAction SilentlyContinue | Where-Object {
+    try { $_.Path -and (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -like "*watch_entries*" } catch { $false }
+}
+if (-not $watchAlive) {
+    Start-Process -FilePath "python" -ArgumentList "C:\Users\Administrator\AppData\Local\Temp\opencode\watch_entries.py" -WorkingDirectory "D:\Project\Wedd\DLineBot" -WindowStyle Minimized
+    Log "Watcher di-start"
+} else {
+    Log "Watcher sudah jalan"
+}
+
 Log "=== Morning start selesai ==="
