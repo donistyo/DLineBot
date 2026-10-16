@@ -72,6 +72,7 @@ class MultiTimeframeConfirmation:
                 "allowed": True,
                 "reason": "Tidak ada data timeframe lain.",
                 "alignment": 0,
+                "entry_mode": None,
                 "details": tf_results
             }
 
@@ -83,13 +84,28 @@ class MultiTimeframeConfirmation:
                 "allowed": True,
                 "reason": "Data M5/M15 tidak lengkap.",
                 "alignment": 0,
+                "entry_mode": None,
                 "details": tf_results
             }
 
         signal_map = {"BUY": "UP", "SELL": "DOWN"}
         tf_signal = signal_map.get(signal, signal)
-        allow, alignment_score, reason = multi_tf_decision(
-            regime_m5, regime_m15, tf_signal
+
+        # Gate M5&M15 (Pengaman 1): normal 2.0; entry awal 1.5
+        # (M5 TREND + ADX >= early_min_m5_adx + M15 WEAK searah)
+        try:
+            from app.config.settings import get_trade_config
+            _gate_normal = float(get_trade_config("gate_normal", 2.0) or 2.0)
+            _gate_early = float(get_trade_config("gate_early", 1.5) or 1.5)
+            _early_adx = float(get_trade_config("early_min_m5_adx", 30.0) or 30.0)
+        except Exception:
+            _gate_normal, _gate_early, _early_adx = 2.0, 1.5, 30.0
+
+        allow, alignment_score, reason, entry_mode = multi_tf_decision(
+            regime_m5, regime_m15, tf_signal,
+            gate_normal=_gate_normal,
+            gate_early=_gate_early,
+            early_min_m5_adx=_early_adx,
         )
 
         return {
@@ -99,5 +115,6 @@ class MultiTimeframeConfirmation:
             "aligned_count": int(alignment_score),
             "total_count": 2,
             "alignment_score": alignment_score,
+            "entry_mode": entry_mode,
             "details": tf_results
         }

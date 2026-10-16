@@ -2,7 +2,11 @@ class DecisionEngine:
 
     def __init__(self, min_scalp_score=55):
         self.min_scalp_score = min_scalp_score
-        self.sideways_penalty = 15
+        try:
+            from app.config.settings import get_trade_config
+            self.sideways_penalty = float(get_trade_config("sideways_penalty", 10) or 10)
+        except Exception:
+            self.sideways_penalty = 10
         self.trend_map = {"UP": "BUY", "DOWN": "SELL", "SIDEWAYS": None}
 
     @staticmethod
@@ -105,9 +109,133 @@ class DecisionEngine:
             "checks": checks,
         }
 
+    def _decide_zone(self, scalp_result):
+        """Mode zone/reversal: keputusan murni dari state zona
+        (scalp_result['zone'] oleh zone_strategy.analyze).
+        Gate arah M5&M15, skor scalp, momentum, wick, rebound
+        TIDAK dipakai (rang market - itulah titik masuknya).
+        Proteksi keras tetap: RSI ekstrem, zona tembus, chase,
+        posisi ekstrem, dan seluruh gate live_engine (daily risk,
+        floor, session, margin, max positions, cooldown).
+        Layer selalu dual 2.
+        """
+        if scalp_result is None:
+            return {"action": "NO_TRADE", "reason": "Data tidak tersedia", "confidence": 0, "checks": []}
+        zone = scalp_result.get("zone")
+        if not isinstance(zone, dict):
+            return {
+                "action": "NO_TRADE",
+                "reason": "Zone: data tidak tersedia (analyze belum jalan)",
+                "confidence": 0, "score": 0, "grade": "-", "checks": []
+            }
+
+        direction = zone.get("direction", "NEUTRAL")
+        rsi = zone.get("rsi")
+        dist = zone.get("dist_atr")
+        bounce = zone.get("bounce_atr")
+        pos_pct = zone.get("pos_pct")
+        base = {
+            "confidence": 0,
+            "score": 0,
+            "grade": "-",
+            "pos_pct": pos_pct,
+            "entry_strategy": "zone",
+            "zone_kind": (zone.get("zone") or {}).get("kind"),
+            "zone_lo": (zone.get("zone") or {}).get("lo"),
+            "zone_hi": (zone.get("zone") or {}).get("hi"),
+            "zone_dist_atr": dist,
+        }
+        checks = []
+
+        def _zfail(label, reason, detail=None):
+            checks.append({"label": label, "ok": False,
+                           "detail": detail if detail is not None else reason})
+            return {"action": "NO_TRADE", "reason": reason, **base, "checks": checks}
+
+        def _zok(label, detail=None):
+            checks.append({"label": label, "ok": True, "detail": detail})
+
+        try:
+            from app.config.settings import get_trade_config
+            _hard = float(get_trade_config("zone_rsi_hard", 80) or 80)
+            _touch = float(get_trade_config("zone_touch_atr", 0.35) or 0.35)
+            _pierce = float(get_trade_config("zone_pierce_atr", 0.5) or 0.5)
+            _chase = float(get_trade_config("zone_chase_atr", 1.5) or 1.5)
+            _pmax = float(get_trade_config("zone_pos_max", 0.80) or 0.80)
+            _pmin = float(get_trade_config("zone_pos_min", 0.20) or 0.20)
+        except Exception:
+            _hard, _touch, _pierce, _chase, _pmax, _pmin = 80.0, 0.35, 0.5, 1.5, 0.80, 0.20
+
+        if direction not in ("BUY", "SELL"):
+            return _zfail(
+                "Zone arah",
+                zone.get("reason") or "Zone: tidak ada setup (netral)",
+                f"direction={direction}"
+            )
+        _zok("Zone arah", direction)
+
+        # RSI keras (Pengaman 2): BUY di puncak / SELL di lembah tetap diblokir
+        if rsi is not None:
+            if direction == "BUY" and rsi > _hard:
+                return _zfail("Zone RSI keras",
+                              f"RSI overbought ({rsi:.1f} > {_hard:.0f}) - jangan beli di puncak",
+                              f"RSI {rsi:.1f}")
+            if direction == "SELL" and rsi < (100.0 - _hard):
+                return _zfail("Zone RSI keras",
+                              f"RSI oversold ({rsi:.1f} < {100.0 - _hard:.0f}) - jangan jual di lembah",
+                              f"RSI {rsi:.1f}")
+            _zok("Zone RSI keras", f"RSI {rsi:.1f}")
+
+        # Validasi ulang jarak zona (defense-in-depth terhadap analyze)
+        if dist is not None:
+            if dist > _touch:
+                return _zfail("Zone jarak",
+                              f"Harga belum sampai zona (dist {dist:.2f}xATR > {_touch:.2f})",
+                              f"{dist:.2f} > {_touch:.2f}")
+            if dist < -_pierce:
+                return _zfail("Zone tembus",
+                              f"Zona sudah tembus (dist {dist:.2f}xATR < -{_pierce:.2f})",
+                              f"{dist:.2f} < -{_pierce:.2f}")
+            _zok("Zone jarak", f"{dist:.2f}xATR dari tepi zona")
+
+        # Chase: bounce sudah terlalu jauh
+        if bounce is not None and bounce > _chase:
+            return _zfail("Zone chase",
+                          f"Sudah bounce {bounce:.2f}xATR dari zona (max {_chase:.2f}) - telat",
+                          f"{bounce:.2f} > {_chase:.2f}")
+        _zok("Zone chase", f"bounce {bounce if bounce is not None else '-'}xATR")
+
+        # Posisi range ekstrem
+        if pos_pct is not None:
+            if direction == "BUY" and pos_pct > _pmax:
+                return _zfail("Zone posisi",
+                              f"Harga di {pos_pct:.0%} range (> {_pmax:.0%}) - jangan buy di atas",
+                              f"{pos_pct:.0%} > {_pmax:.0%}")
+            if direction == "SELL" and pos_pct < _pmin:
+                return _zfail("Zone posisi",
+                              f"Harga di {pos_pct:.0%} range (< {_pmin:.0%}) - jangan sell di bawah",
+                              f"{pos_pct:.0%} < {_pmin:.0%}")
+            _zok("Zone posisi", f"{pos_pct:.0%} range")
+
+        if not zone.get("trigger"):
+            return _zfail("Zone trigger", zone.get("reason") or "Zone: trigger belum valid",
+                          "trigger belum valid")
+        _zok("Zone trigger", zone.get("reason") or "trigger valid")
+
+        return {
+            "action": direction,
+            "reason": zone.get("reason") or f"Zone reentry {direction}",
+            **base,
+            "entry_layers": 2,
+            "tier_reason": "Zone fixed dual 2",
+            "checks": checks,
+        }
+
     def decide(self, prediction=None, scalp_result=None, regime=None, higher_trend=None, higher_adx=0) -> dict:
         if self._entry_strategy() == "bbma":
             return self._decide_bbma(scalp_result)
+        if self._entry_strategy() == "zone":
+            return self._decide_zone(scalp_result)
 
         if scalp_result is None or regime is None:
             return {"action": "NO_TRADE", "reason": "Data tidak tersedia", "confidence": 0, "checks": []}
@@ -150,12 +278,69 @@ class DecisionEngine:
         # trend kuat di higher TF tidak diblokir
         # oleh guard yang menargetkan kejar puncak.
         # =====================================
+        trend = regime.get("trend", "SIDEWAYS") if regime else "SIDEWAYS"
+        mode = regime.get("mode", "RANGING") if regime else "RANGING"
+        adx = regime.get("adx", 0) if regime else 0
+        expected_dir = self.trend_map.get(trend)
+        # Graduated strong_trend: threshold turun seiring ADX naik
+        # ADX 30-39: threshold 70%, ADX 40+: threshold 50%
+        # Guard TIDAK PERNAH dimatikan total
+        strong_trend = (expected_dir == direction
+                        and (adx >= 30 or higher_adx >= 30))
+        _guard_mult = 1.0
+        if strong_trend:
+            _effective_adx = max(adx, higher_adx)
+            if _effective_adx >= 40:
+                _guard_mult = 0.5
+            else:
+                _guard_mult = 0.7
+
+        # =====================================
+        # Momentum entry mode (config-driven):
+        # saat trend kuat terkonfirmasi (ADX
+        # >= momentum_min_adx searah sinyal),
+        # guard keluarga "extended/kejar harga"
+        # dilonggarkan supaya entry bisa masuk
+        # di tengah gerakan (continuation).
+        # Proteksi keras TIDAK dilonggar:
+        # min score, gate M5&M15, trend_override,
+        # wick rejection, M1 momentum, semua
+        # exit (SL+, emergency, floor, loss cap).
+        # =====================================
+        _mom = False
+        _mom_cfg = {}
+        try:
+            from app.config.settings import get_trade_config as _gtc_mom
+            if int(_gtc_mom("momentum_entry", 0) or 0) == 1:
+                _mom_adx = float(_gtc_mom("momentum_min_adx", 40) or 40)
+                if strong_trend and max(adx, higher_adx) >= _mom_adx:
+                    _mom = True
+                    _mom_cfg = {
+                        "rsi": float(_gtc_mom("momentum_rsi_max", 80) or 80),
+                        "move": float(_gtc_mom("momentum_move_atr", 4.0) or 4.0),
+                        "exh": float(_gtc_mom("momentum_exhaustion_atr", 4.5) or 4.5),
+                        "re": float(_gtc_mom("momentum_reentry_atr", 3.0) or 3.0),
+                        "pos": float(_gtc_mom("momentum_pos_max", 0.92) or 0.92),
+                        "rng": float(_gtc_mom("momentum_rng_block", 0.95) or 0.95),
+                    }
+        except Exception:
+            _mom = False
+
         # =====================================
         # RSI Overbought/Oversold filter:
-        # Blokir BUY jika RSI > 75 (overbought)
-        # Blokir SELL jika RSI < 25 (oversold)
-        # Prevent entry di puncak/lembah.
+        # Blokir BUY jika RSI > ambang
+        # Blokir SELL jika RSI < 100 - ambang
+        # Normal: rsi_max_normal (75); momentum: momentum_rsi_max (80)
+        # Prevent entry di puncak/lembah. Filter WAJIB
+        # (Pengaman 2) - tidak bisa dibypass skor tinggi.
         # =====================================
+        _rsi_norm = 75.0
+        try:
+            from app.config.settings import get_trade_config as _gtc_rsi
+            _rsi_norm = float(_gtc_rsi("rsi_max_normal", 75.0) or 75.0)
+        except Exception:
+            _rsi_norm = 75.0
+        _rsi_max = _mom_cfg.get("rsi", 80.0) if _mom else _rsi_norm
         rsi_val = None
         try:
             _ind = scalp_result.get("indicators") or scalp_result
@@ -163,16 +348,16 @@ class DecisionEngine:
         except Exception:
             pass
         if rsi_val is not None and rsi_val > 0:
-            if direction == "BUY" and rsi_val > 75:
+            if direction == "BUY" and rsi_val > _rsi_max:
                 return _reject(
                     "RSI",
-                    f"RSI overbought ({rsi_val:.1f} > 75) - jangan beli di puncak",
+                    f"RSI overbought ({rsi_val:.1f} > {_rsi_max:.0f}) - jangan beli di puncak",
                     f"RSI {rsi_val:.1f}"
                 )
-            if direction == "SELL" and rsi_val < 25:
+            if direction == "SELL" and rsi_val < (100.0 - _rsi_max):
                 return _reject(
                     "RSI",
-                    f"RSI oversold ({rsi_val:.1f} < 25) - jangan jual di lembah",
+                    f"RSI oversold ({rsi_val:.1f} < {100.0 - _rsi_max:.0f}) - jangan jual di lembah",
                     f"RSI {rsi_val:.1f}"
                 )
             _ck("RSI", True, f"RSI {rsi_val:.1f}")
@@ -180,9 +365,11 @@ class DecisionEngine:
         # =====================================
         # N-bar return cap: blokir entry jika
         # harga sudah bergerak terlalu jauh
-        # dalam 10 bar terakhir (> 2.5x ATR).
+        # dalam 10 bar terakhir (> 2.5x ATR;
+        # 4.0 saat momentum mode).
         # Prevent chasing after extended move.
         # =====================================
+        _move_max = _mom_cfg.get("move", 2.5) if _mom else 2.5
         try:
             _closes = []
             for i in range(1, 11):
@@ -195,32 +382,16 @@ class DecisionEngine:
             if _closes and len(_closes) >= 5 and _atr_n > 0:
                 _recent_move = abs(float(scalp_result.get("close", 0) or 0) - _closes[-1])
                 _move_atr = _recent_move / max(_atr_n, 0.01)
-                if _move_atr > 2.5:
+                if _move_atr > _move_max:
                     return _reject(
                         "10-bar move",
                         f"Harga sudah bergerak {_move_atr:.1f}xATR dalam 10 bar - terlalu jauh untuk entry",
-                        f"{_move_atr:.1f}xATR > 2.5"
+                        f"{_move_atr:.1f}xATR > {_move_max:.1f}"
                     )
                 _ck("10-bar move", True, f"{_move_atr:.1f}xATR dari 10 bar")
         except Exception:
             pass
 
-        trend = regime.get("trend", "SIDEWAYS") if regime else "SIDEWAYS"
-        mode = regime.get("mode", "RANGING") if regime else "RANGING"
-        adx = regime.get("adx", 0) if regime else 0
-        expected_dir = self.trend_map.get(trend)
-        # Graduated strong_trend: threshold turun seiring ADX naik
-        # ADX 30-39: threshold 70%, ADX 40+: threshold 50%
-        # Guard TIDAK pernah dimatikan total
-        strong_trend = (expected_dir == direction
-                        and (adx >= 30 or higher_adx >= 30))
-        _guard_mult = 1.0
-        if strong_trend:
-            _effective_adx = max(adx, higher_adx)
-            if _effective_adx >= 40:
-                _guard_mult = 0.5
-            else:
-                _guard_mult = 0.7
 
         if score < self.min_scalp_score:
             return _reject(
@@ -317,38 +488,45 @@ class DecisionEngine:
         # -> jangan entry mengejar gerakan yang sudah terlalu jauh.
         # ADAPTIF: hanya aktif saat trend LEMAH (strong_trend False).
         # Saat trend kuat, breakout dari range adalah continuation valid.
+        # Momentum mode: skip total (breakout = continuation).
         # =====================================
-        if direction == "BUY" and liquidity.get("extended_up"):
-            _ext_thresh = 1.0 * _guard_mult
-            if _ext_thresh < 1.0:
-                if _ext_thresh > 0:
-                    return _reject(
-                        "Extension range",
-                        f"Harga extended di atas range + strong trend (ADX {adx:.0f}) - threshold diturunkan {int(_guard_mult*100)}%",
-                        f"extended_up, thresh {_ext_thresh:.2f}"
-                    )
-        if direction == "SELL" and liquidity.get("extended_down"):
-            _ext_thresh = 1.0 * _guard_mult
-            if _ext_thresh < 1.0:
-                if _ext_thresh > 0:
-                    return _reject(
-                        "Extension range",
-                        f"Harga extended di bawah range + strong trend (ADX {adx:.0f}) - threshold diturunkan {int(_guard_mult*100)}%",
-                        f"extended_down, thresh {_ext_thresh:.2f}"
-                    )
+        if not _mom:
+            if direction == "BUY" and liquidity.get("extended_up"):
+                _ext_thresh = 1.0 * _guard_mult
+                if _ext_thresh < 1.0:
+                    if _ext_thresh > 0:
+                        return _reject(
+                            "Extension range",
+                            f"Harga extended di atas range + strong trend (ADX {adx:.0f}) - threshold diturunkan {int(_guard_mult*100)}%",
+                            f"extended_up, thresh {_ext_thresh:.2f}"
+                        )
+            if direction == "SELL" and liquidity.get("extended_down"):
+                _ext_thresh = 1.0 * _guard_mult
+                if _ext_thresh < 1.0:
+                    if _ext_thresh > 0:
+                        return _reject(
+                            "Extension range",
+                            f"Harga extended di bawah range + strong trend (ADX {adx:.0f}) - threshold diturunkan {int(_guard_mult*100)}%",
+                            f"extended_down, thresh {_ext_thresh:.2f}"
+                        )
         _ck("Extension range", True,
-            f"extended_up={bool(liquidity.get('extended_up'))} extended_down={bool(liquidity.get('extended_down'))}")
+            f"extended_up={bool(liquidity.get('extended_up'))} extended_down={bool(liquidity.get('extended_down'))}{' [momentum]' if _mom else ''}")
 
         # =====================================
         # Exhaustion guard: kalau harga sudah
         # jauh/extended dari EMA50 di arah yang
         # sama dengan sinyal -> jangan kejar.
-        # Mencegah entry tepat di dasar/puncak.
-        # ADAPTIF: hanya aktif saat trend LEMAH.
-        # Saat trend kuat harga wajar extended ->
-        # izinkan (continuation, bukan kejar).
-        # Memakai flag strong_trend tunggal di atas.
+        # Normal: exhaustion_atr_normal (3.0) x guard_mult
+        # Momentum: momentum_exhaustion_atr (4.5).
+        # Filter WAJIB (Pengaman 2).
         # =====================================
+        _exh_norm = 3.0
+        try:
+            from app.config.settings import get_trade_config as _gtc_exh
+            _exh_norm = float(_gtc_exh("exhaustion_atr_normal", 3.0) or 3.0)
+        except Exception:
+            _exh_norm = 3.0
+        _exh_base = _mom_cfg.get("exh", 4.5) if _mom else None
         try:
             _ema_ref = float(scalp_result.get("close", 0) or 0)
             ema50 = None
@@ -368,7 +546,7 @@ class DecisionEngine:
                 if _last_atr <= 0:
                     _last_atr = 2.5
                 dist_atr = abs(_ema_ref - ema50) / max(_last_atr, 0.01)
-                _exh_thresh = 3.0 * _guard_mult
+                _exh_thresh = _exh_base if _exh_base is not None else _exh_norm * _guard_mult
                 if direction == "BUY" and dist_atr >= _exh_thresh:
                     return _reject(
                         "Exhaustion EMA50",
@@ -381,7 +559,7 @@ class DecisionEngine:
                         f"Sell extended {dist_atr:.1f}xATR dari EMA50 (threshold {_exh_thresh:.1f}) - rawan kejar lembah",
                         f"{dist_atr:.1f}xATR >= {_exh_thresh:.1f}"
                     )
-                _ck("Exhaustion EMA50", True, f"{dist_atr:.1f}xATR (max {_exh_thresh:.1f})")
+                _ck("Exhaustion EMA50", True, f"{dist_atr:.1f}xATR (max {_exh_thresh:.1f}{' [momentum]' if _mom else ''})")
         except Exception:
             pass
 
@@ -389,18 +567,15 @@ class DecisionEngine:
         # BBMA Reentry Filter (Oma Ally style):
         # Hanya entry saat harga pullback DEKAT
         # EMA20 (analogi MA5/10 di BBMA).
-        # - BUY: |close - EMA20| <= 1.0 ATR
-        #   (jangan chase puncak)
-        # - SELL: |close - EMA20| <= 1.0 ATR
-        #   (jangan chase lembah)
-        # Saat strong_trend threshold naik ke 1.5 ATR.
+        # Threshold: 1.5 ATR
+        # (momentum mode: momentum_reentry_atr).
         # =====================================
         try:
             _re_close = float(scalp_result.get("close", 0) or 0)
             _re_ema20 = float(scalp_result.get("ema20", 0) or 0)
             _re_atr = float(scalp_result.get("atr", 0) or 0)
             if _re_close > 0 and _re_ema20 > 0 and _re_atr > 0:
-                _re_max = 1.5
+                _re_max = _mom_cfg.get("re", 3.0) if _mom else 1.5
                 _re_dist = abs(_re_close - _re_ema20) / max(_re_atr, 0.01)
                 if _re_dist > _re_max:
                     _side = "atas" if _re_close > _re_ema20 else "bawah"
@@ -409,68 +584,66 @@ class DecisionEngine:
                         f"BBMA reentry: harga {_re_dist:.1f}xATR dari EMA20 ({_side}) - tunggu pullback ke MA",
                         f"{_re_dist:.1f}xATR > {_re_max:.1f} ({_side})"
                     )
-                _ck("BBMA reentry", True, f"{_re_dist:.1f}xATR dari EMA20 (max {_re_max:.1f})")
+                _ck("BBMA reentry", True, f"{_re_dist:.1f}xATR dari EMA20 (max {_re_max:.1f}{' [momentum]' if _mom else ''})")
         except Exception:
             pass
 
         # =====================================
         # Rebound guard: tolak entry dekat tepi
-        # range 20 candle M5 (SELL di dekat low =
-        # jual di dasar jelang rebound, BUY di
-        # dekat high = beli di puncak jelang koreksi).
-        # ADAPTIF: hanya aktif saat trend LEMAH.
-        # Saat trend kuat, dekat tepi range adalah
-        # breakout valid (pakai flag strong_trend
-        # tunggal yang sama dengan guard lain).
+        # range 20 candle M5.
+        # Momentum mode: skip (breakout continuation).
         # =====================================
-        try:
-            _r_close = float(scalp_result.get("close", 0) or 0)
-            _r_high = float(scalp_result.get("range_high", 0) or 0)
-            _r_low = float(scalp_result.get("range_low", 0) or 0)
-            _r_atr = float(scalp_result.get("atr", 0) or 0)
-            if _r_close > 0 and _r_low > 0 and _r_atr > 0:
-                _reb_thresh = _r_atr * 0.25 * _guard_mult
-                if direction == "SELL" and _r_close <= _r_low + _reb_thresh:
-                    return _reject(
-                        "Rebound edge",
-                        f"Sell di dekat low range ({_r_close:.2f} <= low {_r_low:.2f} + {_reb_thresh:.2f} ATR) - rawan rebound naik",
-                        f"{_r_close:.2f} <= {_r_low:.2f}+{_reb_thresh:.2f}"
-                    )
-            if _r_close > 0 and _r_high > 0 and _r_atr > 0:
-                _reb_thresh = _r_atr * 0.25 * _guard_mult
-                if direction == "BUY" and _r_close >= _r_high - _reb_thresh:
-                    return _reject(
-                        "Rebound edge",
-                        f"Buy di dekat high range ({_r_close:.2f} >= high {_r_high:.2f} - {_reb_thresh:.2f} ATR) - rawan koreksi turun",
-                        f"{_r_close:.2f} >= {_r_high:.2f}-{_reb_thresh:.2f}"
-                    )
-            _ck("Rebound edge", True, f"close {_r_close:.2f} tidak di tepi range")
-        except Exception:
-            pass
+        if not _mom:
+            try:
+                _r_close = float(scalp_result.get("close", 0) or 0)
+                _r_high = float(scalp_result.get("range_high", 0) or 0)
+                _r_low = float(scalp_result.get("range_low", 0) or 0)
+                _r_atr = float(scalp_result.get("atr", 0) or 0)
+                if _r_close > 0 and _r_low > 0 and _r_atr > 0:
+                    _reb_thresh = _r_atr * 0.25 * _guard_mult
+                    if direction == "SELL" and _r_close <= _r_low + _reb_thresh:
+                        return _reject(
+                            "Rebound edge",
+                            f"Sell di dekat low range ({_r_close:.2f} <= low {_r_low:.2f} + {_reb_thresh:.2f} ATR) - rawan rebound naik",
+                            f"{_r_close:.2f} <= {_r_low:.2f}+{_reb_thresh:.2f}"
+                        )
+                if _r_close > 0 and _r_high > 0 and _r_atr > 0:
+                    _reb_thresh = _r_atr * 0.25 * _guard_mult
+                    if direction == "BUY" and _r_close >= _r_high - _reb_thresh:
+                        return _reject(
+                            "Rebound edge",
+                            f"Buy di dekat high range ({_r_close:.2f} >= high {_r_high:.2f} - {_reb_thresh:.2f} ATR) - rawan koreksi turun",
+                            f"{_r_close:.2f} >= {_r_high:.2f}-{_reb_thresh:.2f}"
+                        )
+            except Exception:
+                pass
+        _ck("Rebound edge", True, "tidak di tepi range" if not _mom else "skip [momentum]")
 
         # =====================================
         # Price position filter (absolute):
-        # SELL diblokir jika harga < 30% dari range
-        # BUY diblokir jika harga > 70% dari range
+        # SELL diblokir jika harga < 100-pos_max
+        # BUY diblokir jika harga > pos_max
+        # Normal: 0.20/0.80 (momentum: 0.08/0.92)
         # Ini SELALU aktif (tidak tergantung trend).
         # =====================================
+        _pos_max = _mom_cfg.get("pos", 0.92) if _mom else 0.80
         try:
             _rp_close = float(scalp_result.get("close", 0) or 0)
             _rp_high = float(scalp_result.get("range_high", 0) or 0)
             _rp_low = float(scalp_result.get("range_low", 0) or 0)
             if _rp_close > 0 and _rp_high > _rp_low:
                 _pos_pct = (_rp_close - _rp_low) / (_rp_high - _rp_low)
-                if direction == "SELL" and _pos_pct < 0.20:
+                if direction == "SELL" and _pos_pct < (1.0 - _pos_max):
                     return _reject(
                         "Posisi harga di range",
                         f"Harga di posisi rendah ({_pos_pct:.0%} dari range) - jangan SELL di dekat low",
-                        f"{_pos_pct:.0%} < 20%"
+                        f"{_pos_pct:.0%} < {100.0 - _pos_max:.0f}%"
                     )
-                if direction == "BUY" and _pos_pct > 0.80:
+                if direction == "BUY" and _pos_pct > _pos_max:
                     return _reject(
                         "Posisi harga di range",
                         f"Harga di posisi tinggi ({_pos_pct:.0%} dari range) - jangan BUY di dekat high",
-                        f"{_pos_pct:.0%} > 80%"
+                        f"{_pos_pct:.0%} > {_pos_max:.0%}"
                     )
                 _ck("Posisi harga di range", True, f"{_pos_pct:.0%} dari range")
         except Exception:
@@ -639,14 +812,47 @@ class DecisionEngine:
                 "tier_reason": f"guard aktif: {_guard}"
             }
 
+        # =====================================
+        # Hard block rng_pos (semua tier).
+        # rng_pos_m1 sudah direction-aware:
+        # BUY tinggi = dekat puncak range,
+        # SELL tinggi = dekat dasar range.
+        # > 0.85 = ekstrem mikro-range, jangan
+        # entry terlepas score (13 Okt 12:58:
+        # rng_pos 93%, score 73.9, langsung
+        # jatuh -> equity floor).
+        # Momentum mode: threshold momentum_rng_block (0.95).
+        # =====================================
+        if _mom:
+            _rng_block = _mom_cfg.get("rng", 0.95)
+        else:
+            try:
+                from app.config.settings import get_trade_config as _gtc
+                _rng_block = float(_gtc("rng_pos_hard_block", 0.85) or 0)
+            except Exception:
+                _rng_block = 0.85
+        if _rng_block > 0:
+            _rng_now = momentum.get("rng_pos_m1")
+            if _rng_now is not None and float(_rng_now) > _rng_block:
+                return _reject(
+                    "Guard rng_pos hard block",
+                    f"Harga di {int(float(_rng_now) * 100)}% ekstrem range mikro (> {int(_rng_block * 100)}%) - entry diblokir semua tier.",
+                    f"rng_pos {int(float(_rng_now) * 100)}% > {int(_rng_block * 100)}%"
+                ) | {
+                    "pos_pct": _audit_pos,
+                    "entry_layers": 2,
+                    "tier_reason": f"rng_pos hard block {int(float(_rng_now) * 100)}%"
+                }
+
         return {
             "action": direction,
-            "reason": f"Scalp {grade} ({score}/100) searah trend {trend}",
+            "reason": f"Scalp {grade} ({score}/100) searah trend {trend}" + (" [momentum]" if _mom else ""),
             "confidence": score / 100,
             "score": score,
             "grade": grade,
             "pos_pct": _audit_pos,
             "entry_layers": _entry_layers,
             "tier_reason": _tier_reason,
+            "momentum_mode": _mom,
             "checks": checks
         }

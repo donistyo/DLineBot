@@ -82,18 +82,28 @@ def _tf_score(regime: Regime, signal_direction: str) -> float:
     return 0.0
 
 
-def multi_tf_decision(regime_m5: Regime, regime_m15: Regime, signal_direction: str):
+def multi_tf_decision(
+    regime_m5: Regime,
+    regime_m15: Regime,
+    signal_direction: str,
+    gate_normal: float = 2.0,
+    gate_early: float = 1.5,
+    early_min_m5_adx: float = 30.0,
+):
     """
-    Return: (allow: bool, alignment_score: float, reason: str)
+    Return: (allow: bool, alignment_score: float, reason: str, entry_mode: str)
+    entry_mode: "normal" | "early" | "block"
 
-    Aturan (revert ke threshold 25 Sep, rekonstruksi 50 entry 28 Sep-1 Okt):
-    - Total skor (M5 + M15) >= 2.0 -> izinkan
+    Aturan:
+    - JALUR NORMAL: total skor (M5 + M15) >= gate_normal (2.0) -> allow
         Hanya lolos: TREND+TREND (kedua TF ADX>=30 searah sinyal)
-    - Total skor < 2.0 -> block
-        TREND+WEAK (1.5), WEAK+TREND (1.5), WEAK+WEAK (1.0),
-        TREND+SIDEWAYS (1.0), SIDEWAYS+TREND (1.0), dan sisanya
-    - Salah satu TF punya arah MELAWAN sinyal -> block keras,
-        apa pun skornya (tetap wajib searah, tidak ada exception)
+    - JALUR ENTRY AWAL (Pengaman 1): M5 TREND searah + ADX M5 >=
+        early_min_m5_adx (30) + M15 WEAK searah (total 1.5 >= gate_early)
+        -> allow dengan entry_mode "early" (skor entry naik ke
+        min_early_score di live_engine)
+    - M15 SIDEWAYS / salah satu TF MELAWAN sinyal -> block keras,
+        apa pun skornya (tidak ada exception)
+    - Sisanya (WEAK+WEAK, TREND+SIDEWAYS, dll) -> block
     """
     score_m5 = _tf_score(regime_m5, signal_direction)
     score_m15 = _tf_score(regime_m15, signal_direction)
@@ -102,12 +112,35 @@ def multi_tf_decision(regime_m5: Regime, regime_m15: Regime, signal_direction: s
     def _melawan(regime: Regime) -> bool:
         return regime.trend is not None and regime.trend != signal_direction
 
-    allow = total >= 2.0 and not (_melawan(regime_m5) or _melawan(regime_m15))
+    blocked = _melawan(regime_m5) or _melawan(regime_m15)
+
+    if not blocked and total >= gate_normal:
+        allow = True
+        entry_mode = "normal"
+    elif (
+        not blocked
+        and regime_m5.mode == "TREND"
+        and regime_m5.trend == signal_direction
+        and regime_m5.adx >= early_min_m5_adx
+        and regime_m15.mode == "WEAK"
+        and regime_m15.trend == signal_direction
+        and total >= gate_early
+    ):
+        allow = True
+        entry_mode = "early"
+    else:
+        allow = False
+        entry_mode = "block"
+
+    if entry_mode == "early":
+        _tag = " [ENTRY AWAL]"
+    else:
+        _tag = ""
 
     reason = (
         f"M5={regime_m5.mode}({regime_m5.trend},adx={regime_m5.adx:.1f}) "
         f"M15={regime_m15.mode}({regime_m15.trend},adx={regime_m15.adx:.1f}) "
-        f"score={total:.1f}/2.0"
+        f"score={total:.1f}/{gate_normal:.1f}{_tag}"
     )
 
-    return allow, total, reason
+    return allow, total, reason, entry_mode

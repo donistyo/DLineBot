@@ -1,3 +1,4 @@
+import json
 import time
 
 from app.mt5.position_controller import PositionController, _log_close
@@ -69,6 +70,23 @@ class ATRProtectionManager:
         self._stall_start = {}
         self._ever_profit = set()
         self._real_red = set()
+        self._sl_plus_armed = self._load_armed()
+
+    ARMED_PATH = "runtime/sl_plus_armed.json"
+
+    def _load_armed(self):
+        try:
+            with open(self.ARMED_PATH) as f:
+                return {int(t) for t in json.load(f)}
+        except Exception:
+            return set()
+
+    def _save_armed(self):
+        try:
+            with open(self.ARMED_PATH, "w") as f:
+                json.dump(sorted(self._sl_plus_armed), f)
+        except Exception:
+            pass
 
     def cleanup(self, active_tickets):
         self._partial_done = {t for t in self._partial_done if t in active_tickets}
@@ -76,6 +94,10 @@ class ATRProtectionManager:
         self._stall_start = {t: s for t, s in self._stall_start.items() if t in active_tickets}
         self._ever_profit = {t for t in self._ever_profit if t in active_tickets}
         self._real_red = {t for t in self._real_red if t in active_tickets}
+        _armed = {t for t in self._sl_plus_armed if t in active_tickets}
+        if _armed != self._sl_plus_armed:
+            self._sl_plus_armed = _armed
+            self._save_armed()
 
     def attach_initial_sl(self, position, atr):
         dist = self.sl_atr_mult * atr
@@ -333,16 +355,19 @@ class ATRProtectionManager:
         # Tidak dipakai utk posisi TP lebar (premium) - dijaga BasketGuard.
         # be_lock_usd = 0 -> legacy trigger be_trigger_atr x ATR.
         # ======================================
-        _tp_wide = False
-        if getattr(position, "tp", 0):
-            _tp_wide = abs(float(position.tp) - float(position.price_open)) >= 2.5
+        # Klasifikasi: fallback = dibuka TANPA SL (sl=0) ATAU sudah
+        # pernah kena SL+ (armed); premium = punya SL server sejak awal.
+        # Jarak TP TIDAK dipakai - tp_atr_mult x ATR bisa lebih sempit
+        # dari fallback_tp, sehingga threshold lama (2.5) terbalik.
+        _is_fallback = (position.sl == 0
+                        or position.ticket in self._sl_plus_armed)
         # ======================================
         # SL+ (fallback): TANPA SL awal (tahan floating).
         # Saat profit >= sl_plus_usd + buffer -> SL dikunci di
         # entry + sl_plus_usd (di sisi profit, di atas entry).
         # Struktur exit: server TP / SL+ / emergency saja.
         # ======================================
-        if self.sl_plus_usd > 0 and not _tp_wide:
+        if self.sl_plus_usd > 0 and _is_fallback:
             arm = round(self.sl_plus_usd + self.sl_plus_buffer_usd, 5)
             if position.profit >= arm:
                 if is_buy:
@@ -354,6 +379,9 @@ class ATRProtectionManager:
                           or ((not is_buy) and new_sl < position.sl))
                 if better:
                     result = self.controller.modify_sl(position, new_sl)
+                    if result.get("success"):
+                        self._sl_plus_armed.add(position.ticket)
+                        self._save_armed()
                     try:
                         with open("runtime/atr_debug.log", "a") as _f:
                             _f.write(f"{time.strftime('%H:%M:%S')} SL_PLUS_FIRED t={position.ticket} "
@@ -367,7 +395,7 @@ class ATRProtectionManager:
                         "reason": f"SL+ aktif di {position.sl:.2f}."}
             return {"status": "WAITING", "action": "NONE",
                     "reason": f"SL+ tahan floating: profit {position.profit:.2f} < arm {arm:.2f}."}
-        if self.be_lock_usd > 0 and _tp_wide:
+        if self.be_lock_usd > 0 and not _is_fallback:
             return {"status": "WAITING", "action": "NONE",
                     "reason": "BE-lock nonaktif (TP lebar/premium dijaga BasketGuard)."}
         if self.be_lock_usd > 0:

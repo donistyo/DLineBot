@@ -1,7 +1,7 @@
 import json
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from app.data.collector import Collector
 from app.indicators.engine import IndicatorEngine
@@ -264,7 +264,8 @@ class LiveEngine:
         self.controller = PositionController()
 
         # Pre-populate recovery tracker for existing deep loss positions
-        existing = self.position_manager.get_positions(self.symbol)
+        # (hanya posisi bot - order manual tidak melacak)
+        existing = self.position_manager.get_positions(self.symbol, managed_only=True)
         self._recovery_seen = {}
         self._last_same_dir_entry = {}
         if existing:
@@ -371,6 +372,7 @@ class LiveEngine:
 
         self._auto_trade_enabled = True
         self._equity_floor_hit = False
+        self._last_entry_eval_m5 = None
 
         self.daily_risk = DailyRiskManager(
             max_trade=daily_max_trade,
@@ -655,6 +657,57 @@ class LiveEngine:
                 self.last_candle_time = current_candle
 
             # ===============================
+            # Entry evaluation gate (Pengaman 3):
+            # evaluasi entry maksimal 1x per
+            # candle M5 yang sudah terbentuk.
+            # Cycle antar candle: manajemen
+            # posisi/exit + daily risk tetap
+            # jalan; analisis entry di-skip dan
+            # checklist entry terakhir dipertahankan.
+            # Kill-switch: entry_eval_per_m5 > 1.
+            # ===============================
+            _entry_eval_now = True
+            _m5_bucket = None
+            _gate_dbg = ""
+            try:
+                if int(get_trade_config("entry_eval_per_m5", 1) or 1) <= 1:
+                    _last_stored = getattr(self, "_last_entry_eval_m5", None)
+                    if isinstance(current_candle, datetime):
+                        _ts = current_candle.timestamp()
+                    else:
+                        _ts = float(current_candle)
+                    _m5_bucket = int(_ts // 300)
+                    if _last_stored is None:
+                        self._last_entry_eval_m5 = _m5_bucket
+                        _gate_dbg = f"first bucket={_m5_bucket}"
+                    elif _m5_bucket == _last_stored:
+                        _entry_eval_now = False
+                        _gate_dbg = f"same bucket={_m5_bucket} -> SKIP"
+                    else:
+                        self._last_entry_eval_m5 = _m5_bucket
+                        _gate_dbg = f"new bucket={_m5_bucket} (old {_last_stored})"
+            except Exception as _ge:
+                _entry_eval_now = True
+                _gate_dbg = f"ERR {type(_ge).__name__}: {_ge}"
+
+            try:
+                with open("runtime/entry_eval_debug.log", "a") as _f:
+                    _f.write(
+                        f"{time.strftime('%H:%M:%S')} eval_now={_entry_eval_now} "
+                        f"candle={current_candle} {_gate_dbg}\n"
+                    )
+            except Exception as _we:
+                print(f"[ENTRY-GATE] debug write gagal: "
+                      f"{type(_we).__name__}: {_we}", flush=True)
+
+            if not _entry_eval_now:
+                try:
+                    with open("runtime/entry_eval_skip.log", "a") as _f:
+                        _f.write(f"{time.strftime('%H:%M:%S')} SKIP eval M5 bucket={_m5_bucket}\n")
+                except Exception:
+                    pass
+
+            # ===============================
             # Grid Management
             # ===============================
 
@@ -837,9 +890,14 @@ class LiveEngine:
 
             # ===============================
             # Smart Scalping Engine
+            # (evaluasi hanya 1x per candle M5 -
+            # Pengaman 3; cycle lain pakai cache)
             # ===============================
 
-            scalp_result = self.smart_scalping.analyze(df, last)
+            if _entry_eval_now:
+                scalp_result = self.smart_scalping.analyze(df, last)
+            else:
+                scalp_result = dict(self._scalp_result or {})
             SmartScalpingView.show(scalp_result)
 
             # ===============================
@@ -851,7 +909,7 @@ class LiveEngine:
             # tersimpan di scalp_result["bbma"].
             # ===============================
             try:
-                if self._entry_strategy() == "bbma":
+                if _entry_eval_now and self._entry_strategy() == "bbma":
                     from app.trading import bbma_strategy
                     scalp_result["bbma"] = bbma_strategy.analyze(self.symbol)
             except Exception as _bbma_exc:
@@ -861,6 +919,24 @@ class LiveEngine:
                     "slope_strength": 0.0,
                     "dist_mid_atr": 0.0,
                     "reason": f"BBMA: analyze gagal ({_bbma_exc})",
+                }
+
+            # ===============================
+            # Zone/Reversal (entry_strategy=zone):
+            # arah + trigger dari zona S/R swing
+            # M15/M5 + RSI + candle rejection.
+            # Tidak butuh tren - untuk ranging.
+            # ===============================
+            try:
+                if _entry_eval_now and self._entry_strategy() == "zone":
+                    from app.trading import zone_strategy
+                    scalp_result["zone"] = zone_strategy.analyze(self.symbol)
+            except Exception as _zone_exc:
+                scalp_result["zone"] = {
+                    "direction": "NEUTRAL",
+                    "trigger": False,
+                    "entry_mode": "zone",
+                    "reason": f"Zone: analyze gagal ({_zone_exc})",
                 }
 
             Path("runtime").mkdir(exist_ok=True)
@@ -873,80 +949,103 @@ class LiveEngine:
             # (setelah scalp engine agar bisa pakai scalp direction)
             # ===============================
 
-            scalp_dir = (scalp_result or {}).get("scalp_score", {}).get("direction", "NEUTRAL")
-            tf_signal = scalp_dir if scalp_dir in ("BUY", "SELL") else None
+            if _entry_eval_now:
+                scalp_dir = (scalp_result or {}).get("scalp_score", {}).get("direction", "NEUTRAL")
+                tf_signal = scalp_dir if scalp_dir in ("BUY", "SELL") else None
 
-            # ====================================================
-            # TF SIGNAL INFERENCE: Jika scalp NEUTRAL tapi M5+M15
-            # keduanya searah (TREND/WEAK), pakai arah dari higher TF
-            # Pakai classify_regime() untuk konsistensi
-            # ====================================================
-            if tf_signal is None:
+                # ====================================================
+                # TF SIGNAL INFERENCE: Jika scalp NEUTRAL tapi M5+M15
+                # keduanya searah (TREND/WEAK), pakai arah dari higher TF
+                # Pakai classify_regime() untuk konsistensi
+                # ====================================================
+                if tf_signal is None:
+                    try:
+                        from app.trading.regime_logic import classify_regime
+                        _m5_check = self.smart_scalping.get_ema_adx(mt5.TIMEFRAME_M5)
+                        _m15_check = self.smart_scalping.get_ema_adx(mt5.TIMEFRAME_M15)
+                        if _m5_check and _m15_check:
+                            _c5, _e20_5, _e50_5, _adx5 = _m5_check
+                            _c15, _e20_15, _e50_15, _adx15 = _m15_check
+                            _r5 = classify_regime(_c5, _e20_5, _e50_5, _adx5)
+                            _r15 = classify_regime(_c15, _e20_15, _e50_15, _adx15)
+                            # Keduanya harus punya arah yang sama
+                            if _r5.trend and _r15.trend and _r5.trend == _r15.trend:
+                                tf_signal = "SELL" if _r5.trend == "DOWN" else "BUY"
+                    except Exception:
+                        pass
+
+                tf_confirmation = self.multi_tf.confirm(
+                    prediction, last, signal=tf_signal
+                )
+                MultiTFView.show(tf_confirmation)
+            else:
+                tf_confirmation = None
+
+            # ===============================
+            # Decision
+            # ===============================
+
+            if _entry_eval_now:
+                self.decision_engine.min_scalp_score = self._current_min_score()
                 try:
-                    from app.trading.regime_logic import classify_regime
-                    _m5_check = self.smart_scalping.get_ema_adx(mt5.TIMEFRAME_M5)
-                    _m15_check = self.smart_scalping.get_ema_adx(mt5.TIMEFRAME_M15)
-                    if _m5_check and _m15_check:
-                        _c5, _e20_5, _e50_5, _adx5 = _m5_check
-                        _c15, _e20_15, _e50_15, _adx15 = _m15_check
-                        _r5 = classify_regime(_c5, _e20_5, _e50_5, _adx5)
-                        _r15 = classify_regime(_c15, _e20_15, _e50_15, _adx15)
-                        # Keduanya harus punya arah yang sama
-                        if _r5.trend and _r15.trend and _r5.trend == _r15.trend:
-                            tf_signal = "SELL" if _r5.trend == "DOWN" else "BUY"
+                    self.decision_engine.sideways_penalty = float(get_trade_config("sideways_penalty", 10) or 10)
+                except Exception:
+                    self.decision_engine.sideways_penalty = 10
+
+                # Pengaman 5 (entry awal): gate_early (1.5) hanya
+                # boleh masuk dengan skor >= min_early_score (70).
+                try:
+                    if (tf_confirmation or {}).get("entry_mode") == "early":
+                        _min_early = float(get_trade_config("min_early_score", 70) or 70)
+                        if self.decision_engine.min_scalp_score < _min_early:
+                            self.decision_engine.min_scalp_score = _min_early
                 except Exception:
                     pass
 
-            tf_confirmation = self.multi_tf.confirm(
-                prediction, last, signal=tf_signal
-            )
-            MultiTFView.show(tf_confirmation)
-
-            # ===============================
-            # Decision
-            # ===============================
-
-            self.decision_engine.min_scalp_score = self._current_min_score()
-
-            higher_trend = None
-            higher_adx = 0
-            try:
-                tf_details = (tf_confirmation or {}).get("details", {}) or {}
-                _dirs = []
-                _adxs = []
-                for _tf, _info in tf_details.items():
-                    if isinstance(_info, dict) and _info.get("ema_trend") in ("UP", "DOWN"):
-                        _dirs.append(self.decision_engine.trend_map.get(_info["ema_trend"]))
-                        _adxs.append(float(_info.get("adx", 0) or 0))
-                if _dirs and all(d == _dirs[0] for d in _dirs):
-                    higher_trend = _dirs[0]
-                    higher_adx = max(_adxs) if _adxs else 0
-            except Exception:
                 higher_trend = None
                 higher_adx = 0
+                try:
+                    tf_details = (tf_confirmation or {}).get("details", {}) or {}
+                    _dirs = []
+                    _adxs = []
+                    for _tf, _info in tf_details.items():
+                        if isinstance(_info, dict) and _info.get("ema_trend") in ("UP", "DOWN"):
+                            _dirs.append(self.decision_engine.trend_map.get(_info["ema_trend"]))
+                            _adxs.append(float(_info.get("adx", 0) or 0))
+                    if _dirs and all(d == _dirs[0] for d in _dirs):
+                        higher_trend = _dirs[0]
+                        higher_adx = max(_adxs) if _adxs else 0
+                except Exception:
+                    higher_trend = None
+                    higher_adx = 0
 
-            # =====================================
-            # Decision
-            # =====================================
+                # Update scalp_result dengan inferred direction dari higher TF
+                if tf_signal and scalp_dir == "NEUTRAL":
+                    scalp_result = dict(scalp_result)
+                    scalp_result["scalp_score"] = dict(scalp_result.get("scalp_score", {}))
+                    scalp_result["scalp_score"]["direction"] = tf_signal
+                    scalp_result["scalp_score"]["_inferred_from"] = "M5+M15_TREND"
 
-            # Update scalp_result dengan inferred direction dari higher TF
-            if tf_signal and scalp_dir == "NEUTRAL":
-                scalp_result = dict(scalp_result)
-                scalp_result["scalp_score"] = dict(scalp_result.get("scalp_score", {}))
-                scalp_result["scalp_score"]["direction"] = tf_signal
-                scalp_result["scalp_score"]["_inferred_from"] = "M5+M15_TREND"
+                decision = self.decide(
+                    prediction,
+                    scalp_result,
+                    regime,
+                    higher_trend,
+                    higher_adx,
+                )
 
-            decision = self.decide(
-                prediction,
-                scalp_result,
-                regime,
-                higher_trend,
-                higher_adx,
-            )
-
-            DecisionView.show(
-                decision
-            )
+                DecisionView.show(
+                    decision
+                )
+            else:
+                higher_trend = None
+                higher_adx = 0
+                decision = {
+                    "action": "NO_TRADE",
+                    "reason": "Evaluasi entry hanya 1x per candle M5 (Pengaman 3).",
+                    "confidence": 0,
+                    "checks": [],
+                }
 
             # ===============================
             # Tier downgrade: PREMIUM -> FALLBACK
@@ -973,24 +1072,27 @@ class LiveEngine:
             # Proposed Trade
             # ===============================
 
-            try:
-                proposed = self.calculate_risk(
-                    prediction, last["close"], last, regime
-                )
-            except Exception:
-                proposed = None
+            if _entry_eval_now:
+                try:
+                    proposed = self.calculate_risk(
+                        prediction, last["close"], last, regime
+                    )
+                except Exception:
+                    proposed = None
 
-            if proposed and proposed.get("lot_size", 0) > 0:
-                print()
-                print("=" * 60)
-                print("PROPOSED TRADE")
-                print("=" * 60)
-                print(f"Signal      : {prediction['signal']}")
-                print(f"Entry       : {proposed['entry_price']:.2f}")
-                print(f"Stop Loss   : {proposed['stop_loss']:.2f}")
-                print(f"Take Profit : {proposed['take_profit']:.2f}")
-                print(f"Lot Size    : {proposed['lot_size']}")
-                print(f"Risk Amount : ${proposed['risk_amount']:.2f}")
+                if proposed and proposed.get("lot_size", 0) > 0:
+                    print()
+                    print("=" * 60)
+                    print("PROPOSED TRADE")
+                    print("=" * 60)
+                    print(f"Signal      : {prediction['signal']}")
+                    print(f"Entry       : {proposed['entry_price']:.2f}")
+                    print(f"Stop Loss   : {proposed['stop_loss']:.2f}")
+                    print(f"Take Profit : {proposed['take_profit']:.2f}")
+                    print(f"Lot Size    : {proposed['lot_size']}")
+                    print(f"Risk Amount : ${proposed['risk_amount']:.2f}")
+            else:
+                proposed = None
 
             # ===============================
             # Trade Filter
@@ -1006,7 +1108,11 @@ class LiveEngine:
             daily_result = self.daily_risk.allow(symbol=self.symbol)
             DailyRiskView.show(daily_result)
 
-            if not daily_result["allowed"] and "Batas trade harian" in daily_result.get("reason", ""):
+            _daily_reason = daily_result.get("reason", "")
+            if not daily_result["allowed"] and (
+                "Batas trade harian" in _daily_reason
+                or "Target profit harian" in _daily_reason
+            ):
                 if self._auto_trade_enabled:
                     self._auto_trade_enabled = False
                     with open("runtime/auto_trade_enabled.json", "w") as f:
@@ -1018,7 +1124,14 @@ class LiveEngine:
                     print(f"Alasan: {daily_result['reason']}")
                     print(f"Trade hari ini: {daily_result.get('trade_today', '?')}")
                     try:
-                        self.telegram.send(f"AutoTrade OFF — {daily_result['reason']} ({daily_result.get('trade_today', '?')} trade)")
+                        _extra = ""
+                        if "Target profit harian" in _daily_reason:
+                            _sum = self.history_manager.summary(symbol=self.symbol, bot_only=True)
+                            _extra = f" | profit hari ini: {_sum.get('profit', 0):+.2f} USD"
+                        self.telegram.send(
+                            f"AutoTrade OFF — {daily_result['reason']}"
+                            f" ({daily_result.get('trade_today', '?')} trade){_extra}"
+                        )
                     except:
                         pass
 
@@ -1032,7 +1145,12 @@ class LiveEngine:
             except:
                 _lot = TRADE_LOT_SIZE
 
-            from app.config.settings import load_trade_config, get_trade_config
+            # CATATAN: jangan import get_trade_config di sini -
+            # import lokal membuatnya jadi variabel lokal SELURUH
+            # run_once sehingga semua pemanggilan sebelum baris ini
+            # (eval gate, bump skor early, sideways_penalty) gagal
+            # UnboundLocalError dan ditelan except.
+            from app.config.settings import load_trade_config
             load_trade_config()
             _cfg_positions = get_trade_config("max_positions")
             if _cfg_positions:
@@ -1069,7 +1187,7 @@ class LiveEngine:
             # ===============================
 
             positions = self.position_manager.get_positions(
-                self.symbol
+                self.symbol, managed_only=True
             )
 
             # ===============================
@@ -1088,7 +1206,7 @@ class LiveEngine:
                         ExitView.show(_br)
                     if _basket_results:
                         positions = self.position_manager.get_positions(
-                            self.symbol
+                            self.symbol, managed_only=True
                         ) or []
                 except Exception as _berr:
                     with open("runtime/basket_guard_error.log", "a") as _f:
@@ -1248,6 +1366,16 @@ class LiveEngine:
                     _cfg_vol = json.load(_f)
                 _vol_filter_on = bool(_cfg_vol.get("atr_volatility_filter", True))
                 _atr_entry_max = float(_cfg_vol.get("atr_entry_max", 0) or 0)
+                # Momentum mode: ATR tinggi itu wajar saat trend bergerak
+                # kuat - pakai ambang lebih longgar.
+                if decision.get("momentum_mode"):
+                    try:
+                        _atr_entry_max = max(
+                            _atr_entry_max,
+                            float(_cfg_vol.get("momentum_atr_entry_max", 0) or 0),
+                        )
+                    except Exception:
+                        pass
                 if _vol_filter_on:
                     _atr_filter_ok, _atr_filter_reason = self.atr_helper.volatility_ok()
                 if _atr_filter_ok and _atr_entry_max > 0:
@@ -1258,9 +1386,10 @@ class LiveEngine:
             except Exception:
                 pass
 
-            if self._entry_strategy() == "bbma":
+            if self._entry_strategy() in ("bbma", "zone"):
                 # Gate multi-TF lama dibypass: konfirmasi M15 sudah
-                # menjadi syarat wajib di dalam BBMA analyze().
+                # menjadi syarat wajib di dalam BBMA analyze();
+                # zone entry memang untuk ranging (tidak butuh tren).
                 _tf_ok = True
             else:
                 _tf_ok = bool(tf_confirmation.get("allowed", False)) if tf_confirmation else True
@@ -1298,21 +1427,25 @@ class LiveEngine:
 
             )
 
-            self._write_entry_checklist(
-                can_trade=can_trade,
-                decision=decision,
-                filter_result=filter_result,
-                daily_result=daily_result,
-                position_result=position_result,
-                tf_confirmation=tf_confirmation,
-                reentry_reason=reentry_reason,
-                same_dir_reason=same_dir_reason,
-                atr_filter_ok=_atr_filter_ok,
-                atr_filter_reason=_atr_filter_reason,
-                session_result=session_result,
-                scalp_result=scalp_result,
-                regime=regime,
-            )
+            # Checklist entry ditulis hanya pada cycle evaluasi
+            # (Pengaman 3) supaya status terakhir tetap terlihat
+            # di dashboard sampai evaluasi M5 berikutnya.
+            if _entry_eval_now:
+                self._write_entry_checklist(
+                    can_trade=can_trade,
+                    decision=decision,
+                    filter_result=filter_result,
+                    daily_result=daily_result,
+                    position_result=position_result,
+                    tf_confirmation=tf_confirmation,
+                    reentry_reason=reentry_reason,
+                    same_dir_reason=same_dir_reason,
+                    atr_filter_ok=_atr_filter_ok,
+                    atr_filter_reason=_atr_filter_reason,
+                    session_result=session_result,
+                    scalp_result=scalp_result,
+                    regime=regime,
+                )
 
             if can_trade:
 
@@ -1490,6 +1623,16 @@ class LiveEngine:
 
                 }
 
+            elif not _entry_eval_now:
+
+                result = {
+
+                    "status": "BLOCKED",
+
+                    "reason": "Evaluasi entry hanya 1x per candle M5 (Pengaman 3)."
+
+                }
+
             elif decision["action"] == "NO_TRADE":
 
                 result = {
@@ -1510,7 +1653,7 @@ class LiveEngine:
 
                 }
 
-            elif self._entry_strategy() != "bbma" and tf_confirmation and not tf_confirmation.get("allowed", False):
+            elif self._entry_strategy() not in ("bbma", "zone") and tf_confirmation and not tf_confirmation.get("allowed", False):
 
                 result = {
 
@@ -1562,15 +1705,35 @@ class LiveEngine:
 
             else:
 
-                result = self.auto_trader.execute(
+                # Pengaman 4: margin bebas harus cukup sebelum
+                # kirim order (saldo tipis jangan diandalkan ke
+                # filter entry lain).
+                _margin_block = None
+                try:
+                    _min_free = float(get_trade_config("min_free_margin", 5.0) or 0)
+                    _free_margin = float((account or {}).get("free_margin", 0) or 0)
+                    if _min_free > 0 and _free_margin < _min_free:
+                        _margin_block = (
+                            f"Margin bebas {_free_margin:.2f} < minimum {_min_free:.2f}"
+                        )
+                except Exception:
+                    _margin_block = None
 
-                    decision=decision,
+                if _margin_block:
+                    result = {
+                        "status": "BLOCKED",
+                        "reason": f"Margin bebas tidak cukup: {_margin_block}"
+                    }
+                else:
+                    result = self.auto_trader.execute(
 
-                    risk=risk,
+                        decision=decision,
 
-                    symbol=self.symbol
+                        risk=risk,
 
-                )
+                        symbol=self.symbol
+
+                    )
 
             AutoTraderView.show(result)
 
@@ -2008,7 +2171,11 @@ class LiveEngine:
             self._score_penalty = 0
 
     def _current_min_score(self):
-        return 55 + self._score_penalty
+        try:
+            _base = float(get_trade_config("min_scalp_score", 60) or 60)
+        except Exception:
+            _base = 60.0
+        return _base + self._score_penalty
 
     def _entry_strategy(self):
         """Mode strategi entry: 'scalp' (lama) atau 'bbma' (utama)."""
@@ -2051,12 +2218,21 @@ class LiveEngine:
             direction = score_data.get("direction", "NEUTRAL")
             action = decision.get("action", "NO_TRADE")
             min_score = self._current_min_score()
+            # Skor minimum efektif: termasuk bump entry awal
+            # (min_early_score) yang diset di decision_engine.
+            try:
+                _de_min = float(getattr(self.decision_engine, "min_scalp_score", 0) or 0)
+                if _de_min > min_score:
+                    min_score = _de_min
+            except Exception:
+                pass
             penalty = self._score_penalty
 
             items = []
             items.append(self._ck("Autotrade ON", self._auto_trade_enabled, None))
 
             _bbma_mode = self._entry_strategy() == "bbma"
+            _zone_mode = self._entry_strategy() == "zone"
 
             equity_floor_ok, _equity_now, floor = self._equity_floor_state()
             items.append(self._ck(
@@ -2080,6 +2256,13 @@ class LiveEngine:
                     True,
                     f"{score:.1f}/100 {score_data.get('grade', '-')} - skor tidak dipakai di mode BBMA",
                 ))
+            elif _zone_mode:
+                _z = (scalp_result or {}).get("zone") or {}
+                items.append(self._ck(
+                    "Zone setup (mode ZONE - skor bypass)",
+                    bool(_z.get("trigger")) and action in ("BUY", "SELL"),
+                    _z.get("reason") or "Zone data tidak tersedia",
+                ))
             else:
                 sig_enough = score >= min_score
                 items.append(self._ck(
@@ -2088,7 +2271,11 @@ class LiveEngine:
                     f"{score:.1f}/100 {score_data.get('grade', '-')}" + (f" (penalti loss x{penalty})" if penalty else "")
                 ))
 
-            items.append(self._ck("Arah sinyal jelas", action in ("BUY", "SELL"), f"Direction {direction}"))
+            if _zone_mode:
+                _z_dir = decision.get("action") if action in ("BUY", "SELL") else (scalp_result or {}).get("zone", {}).get("direction", "NEUTRAL")
+                items.append(self._ck("Arah sinyal jelas", action in ("BUY", "SELL"), f"Zone direction {_z_dir}"))
+            else:
+                items.append(self._ck("Arah sinyal jelas", action in ("BUY", "SELL"), f"Direction {direction}"))
 
             action_ok = action in ("BUY", "SELL")
             items.append(self._ck("Keputusan siap trade", action_ok, decision.get("reason", "")))
@@ -2139,9 +2326,19 @@ class LiveEngine:
                     True,
                     (tf_confirmation or {}).get("reason") or "Konfirmasi M15 jadi syarat wajib BBMA",
                 ))
+            elif _zone_mode:
+                items.append(self._ck(
+                    "M5 & M15 searah sinyal (mode ZONE - bypass, entry reversal)",
+                    True,
+                    "Zone entry untuk ranging - gate arah tidak dipakai",
+                ))
             else:
                 tf_allowed = bool(tf_confirmation.get("allowed", False)) if tf_confirmation else True
-                items.append(self._ck("M5 & M15 searah sinyal", tf_allowed, (tf_confirmation or {}).get("reason", "")))
+                _tf_detail = (tf_confirmation or {}).get("reason", "")
+                _em = (tf_confirmation or {}).get("entry_mode")
+                if _em in ("normal", "early"):
+                    _tf_detail = f"{_tf_detail} | mode={_em}"
+                items.append(self._ck("M5 & M15 searah sinyal", tf_allowed, _tf_detail))
 
             _cd_min = int(float(get_trade_config("reentry_cooldown_min", 5) or 0))
             items.append(self._ck(

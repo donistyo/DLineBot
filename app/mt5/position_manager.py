@@ -7,7 +7,7 @@ class PositionManager:
     def __init__(self):
         MT5Session.ensure_connection()
 
-    def get_positions(self, symbol=None):
+    def get_positions(self, symbol=None, managed_only=False):
 
         if symbol:
             positions = mt5.positions_get(symbol=symbol)
@@ -17,28 +17,34 @@ class PositionManager:
         if positions is None:
             return []
 
+        # managed_only: hanya posisi milik sistem
+        # (magic != 0). Order manual (magic 0) dibiarkan
+        # sendiri - tidak dihitung & tidak dikelola engine.
+        if managed_only:
+            positions = [p for p in positions if getattr(p, "magic", 0) != 0]
+
         return list(positions)
 
-    def count(self, symbol=None):
+    def count(self, symbol=None, managed_only=False):
 
-        return len(self.get_positions(symbol))
+        return len(self.get_positions(symbol, managed_only=managed_only))
 
-    def has_position(self, symbol):
+    def has_position(self, symbol, managed_only=False):
 
-        return self.count(symbol) > 0
+        return self.count(symbol, managed_only=managed_only) > 0
 
-    def has_buy(self, symbol):
+    def has_buy(self, symbol, managed_only=False):
 
-        positions = self.get_positions(symbol)
+        positions = self.get_positions(symbol, managed_only=managed_only)
 
         return any(
             p.type == mt5.POSITION_TYPE_BUY
             for p in positions
         )
 
-    def has_sell(self, symbol):
+    def has_sell(self, symbol, managed_only=False):
 
-        positions = self.get_positions(symbol)
+        positions = self.get_positions(symbol, managed_only=managed_only)
 
         return any(
             p.type == mt5.POSITION_TYPE_SELL

@@ -1432,7 +1432,7 @@ tr:hover td { background:rgba(59,130,246,0.05); }
   .chart-container { padding:8px; }
 }
 /* ===== TradingView monitor panel ===== */
-.tv-main { display:grid; grid-template-columns:1fr 340px; gap:12px; }
+.tv-main { display:flex; flex-direction:column; gap:12px; }
 @media(max-width:980px){ .tv-main { grid-template-columns:1fr; } }
 .tv-chart { background:rgba(30,41,59,0.5); border:1px solid rgba(59,130,246,0.08); border-radius:10px; padding:10px; min-height:620px; }
 .tv-check { display:flex; flex-direction:column; gap:12px; min-width:0; }
@@ -3493,32 +3493,32 @@ function renderTvChecklist(ck) {
   summ.textContent = allOk ? okCount + '/' + total + ' OK' : okCount + '/' + total + ' PASS';
   summ.style.color = allOk ? '#6ee7b7' : '#fbbf24';
 
-  const rows = items.map(i => {
+  const chips = items.map(i => {
     const ok = !!i.ok;
-    const dot = ok ? '<span style="color:#22c55e;font-size:9px">&#9679;</span>' :
-                    '<span style="color:#ef4444;font-size:9px">&#9679;</span>';
-    const lbl = i.label;
-    const det = i.detail ? '<span style="color:#64748b;font-size:10px">' + escapeHtml(String(i.detail)) + '</span>' : '';
-    const norm = ok ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)';
+    const bg = ok ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.15)';
     const txt = ok ? '#6ee7b7' : '#fca5a5';
-    return '<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;margin:3px 0;border-radius:6px;background:' + norm + '">' +
-      '<span style="width:8px;text-align:center">' + dot + '</span>' +
-      '<span style="flex:1;font-size:11px;color:' + txt + '">' + escapeHtml(lbl) + '</span>' +
-      det +
-    '</div>';
+    const dot = ok ? '#22c55e' : '#ef4444';
+    let det = i.detail ? String(i.detail) : '';
+    if (det.length > 38) det = det.slice(0, 36) + '…';
+    const detHtml = det ? '<span style="color:#94a3b8;font-size:10px;margin-left:2px">' + escapeHtml(det) + '</span>' : '';
+    const full = escapeHtml(i.label + (i.detail ? ' — ' + i.detail : ''));
+    return '<span title="' + full + '" style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:999px;background:' + bg + ';font-size:11px;color:' + txt + ';white-space:nowrap;max-width:100%">' +
+      '<span style="width:6px;height:6px;border-radius:50%;background:' + dot + ';flex:none"></span>' +
+      '<span>' + escapeHtml(i.label) + '</span>' + detHtml +
+    '</span>';
   }).join('');
 
   let verdict = '';
   if (ck.decision_reason) {
-    verdict = '<div style="margin-top:8px;padding:7px 9px;border-radius:6px;font-size:11px;background:rgba(99,102,241,0.12);color:#a5b4fc">' +
+    verdict = '<div style="margin-top:8px;padding:6px 9px;border-radius:6px;font-size:11px;background:rgba(99,102,241,0.12);color:#a5b4fc">' +
       '<b style="color:#e2e8f0">Keputusan:</b> ' + escapeHtml(ck.decision_action) + ' &mdash; ' + escapeHtml(ck.decision_reason) + '</div>';
   }
   if (!allOk && ck.blocked_reason) {
-    verdict += '<div style="margin-top:6px;padding:7px 9px;border-radius:6px;font-size:11px;background:rgba(239,68,68,0.15);color:#fca5a5">' +
+    verdict += '<div style="margin-top:6px;padding:6px 9px;border-radius:6px;font-size:11px;background:rgba(239,68,68,0.15);color:#fca5a5">' +
       '<b>BLOCKED:</b> ' + escapeHtml(ck.blocked_reason) + '</div>';
   }
 
-  body.innerHTML = rows + verdict;
+  body.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">' + chips + '</div>' + verdict;
 }
 
 function renderTVSignal(ss, tfs) {

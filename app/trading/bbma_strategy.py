@@ -16,7 +16,7 @@ dinormalisasi ATR, bertanda: positif = naik) dan ``dist_mid_atr``
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -529,8 +529,10 @@ def _fetch_emergency_exits(lookback_s):
     import MetaTrader5 as mt5
 
     now = time.time()
-    frm = datetime.fromtimestamp(now - lookback_s, timezone.utc).replace(tzinfo=None)
-    to = datetime.fromtimestamp(now, timezone.utc).replace(tzinfo=None)
+    # MT5 Python API menafsirkan datetime naive = WAKTU LOKAL (terverifikasi
+    # 7 Okt: naive 06:25-06:50 mengembalikan deal 06:25-06:50 WIB, bukan UTC).
+    frm = datetime.fromtimestamp(now - lookback_s)
+    to = datetime.fromtimestamp(now)
     deals = mt5.history_deals_get(frm, to) or []
     out = []
     for d in deals:
@@ -541,7 +543,16 @@ def _fetch_emergency_exits(lookback_s):
         dirn = "SELL" if d.type == mt5.DEAL_TYPE_BUY else "BUY"
         out.append((int(d.time), dirn))
     out.sort()
-    return out
+    # deal berlapis dual 1 pair entry close dalam hitungan detik -> 1 event
+    # (tanpa ini run_n=2 dari SEBUAH pair kalah -> trigger padahal aturan
+    # butuh 2 pair kalah beruntun; pair berbeda minimal menit-an jauhnya)
+    merged = []
+    for t, d in out:
+        if merged and d == merged[-1][1] and t - merged[-1][0] <= 60:
+            merged[-1] = (t, d)
+        else:
+            merged.append((t, d))
+    return merged
 
 
 def _streak_until(exits, direction, count, window_s, block_s):

@@ -39,7 +39,7 @@ check("config premium_copies=4 (buka 4, bukan 10)", cfg.get("premium_copies") ==
 check("config basket_min_size=3 (premium 4 terjaga, fallback 2 bebas)", cfg.get("basket_min_size") == 3, str(cfg.get("basket_min_size")))
 check("config sl_plus_usd=0.5 (kunci +0.50)", cfg.get("sl_plus_usd") == 0.5, str(cfg.get("sl_plus_usd")))
 check("config fallback_tp_usd=3.0", cfg.get("fallback_tp_usd") == 3.0, str(cfg.get("fallback_tp_usd")))
-check("config emergency_max_usd=3.0 (cap rugi per posisi)", cfg.get("emergency_max_usd") == 3.0, str(cfg.get("emergency_max_usd")))
+check("config emergency_max_usd=4.5 (cap rugi per posisi, longgar 3.0->4.5 per counterfactual)", cfg.get("emergency_max_usd") == 4.5, str(cfg.get("emergency_max_usd")))
 check("config atr_entry_max=5.0 (blokir entry saat spike ATR)", cfg.get("atr_entry_max") == 5.0, str(cfg.get("atr_entry_max")))
 check("config fast_tp_usd=1.0 (fast TP prioritas +1.00)", cfg.get("fast_tp_usd") == 1.0, str(cfg.get("fast_tp_usd")))
 check("config reentry_cooldown_min=10 (cooldown re-entry arah sama 10m)", cfg.get("reentry_cooldown_min") == 10, str(cfg.get("reentry_cooldown_min")))
@@ -56,7 +56,7 @@ check("config bbma_loss_streak_count=2 (minimal 2 emergency beruntun)", cfg.get(
 check("config bbma_loss_streak_window_min=60 (jendela streak 60m)", cfg.get("bbma_loss_streak_window_min") == 60, str(cfg.get("bbma_loss_streak_window_min")))
 check("config bbma_loss_streak_cooldown_min=45 (cooldown arah 45m)", cfg.get("bbma_loss_streak_cooldown_min") == 45, str(cfg.get("bbma_loss_streak_cooldown_min")))
 check("config same_dir_spacing=300 (jaga jarak arah sama 5 menit)", cfg.get("same_dir_spacing") == 300, str(cfg.get("same_dir_spacing")))
-check("config session_windows=[(23,11)] (hanya 06:00-18:00 WIB)", cfg.get("session_windows") == [[23, 11]], str(cfg.get("session_windows")))
+check("config session_windows=[(23,16)] (06:00-23:59 WIB - malam diperpanjang s/d 23.50 utk observasi)", cfg.get("session_windows") == [[23, 16]], str(cfg.get("session_windows")))
 
 _src_hist = open("app/mt5/history_manager.py", encoding="utf-8").read()
 check("sl_exits memfilter BASKET_CUT", "BASKET_CUT" in _src_hist)
@@ -74,7 +74,7 @@ from app.trading.decision_engine import DecisionEngine
 engine = DecisionEngine(min_scalp_score=55)
 
 # Paksa mode scalp untuk suite gate ini: test tetap valid walau
-# config live sudah entry_strategy=bbma (suite [1] menguji jalur lama).
+# config live sudah entry_strategy=scalp (kembali ke strategi awal 8 Okt; suite [1] menguji jalur lama).
 # Mode bbma diuji terpisah oleh test_bbma.py + jalur _decide_bbma.
 import app.config.settings as _settings
 

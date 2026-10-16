@@ -11,18 +11,20 @@ class PositionFilter:
 
     def allow(self, symbol="XAUUSD", direction=None):
 
-        positions = self.position_manager.get_positions(symbol) or []
+        # Hanya posisi bot (magic != 0) yang dihitung;
+        # order manual dibiarkan - tidak mempengaruhi limit.
+        positions = self.position_manager.get_positions(symbol, managed_only=True) or []
         count = len(positions)
 
         if direction == "BUY":
-            if self.position_manager.has_sell(symbol):
+            if self.position_manager.has_sell(symbol, managed_only=True):
                 return {
                     "allowed": False,
                     "reason": "Ada posisi SELL berlawanan arah.",
                     "position_count": count
                 }
         elif direction == "SELL":
-            if self.position_manager.has_buy(symbol):
+            if self.position_manager.has_buy(symbol, managed_only=True):
                 return {
                     "allowed": False,
                     "reason": "Ada posisi BUY berlawanan arah.",

@@ -221,7 +221,7 @@ class SmartPositionManager:
     def _get_active_positions(self):
         from app.mt5.position_manager import PositionManager
         pm = PositionManager()
-        return pm.get_positions(self.symbol) or []
+        return pm.get_positions(self.symbol, managed_only=True) or []
 
     def _has_open_position(self):
         return len(self._get_active_positions()) > 0
