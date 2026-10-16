@@ -992,13 +992,19 @@ class LiveEngine:
                 except Exception:
                     self.decision_engine.sideways_penalty = 10
 
-                # Pengaman 5 (entry awal): gate_early (1.5) hanya
-                # boleh masuk dengan skor >= min_early_score (70).
+                # Pengaman 5 (entry awal Mode A): skor entry >= min_early_score (70).
+                # early_sideways (eksperimen): skor juga >= 70 + M1 searah
+                # eksplisit (flag _early_sideways -> decision_engine).
                 try:
-                    if (tf_confirmation or {}).get("entry_mode") == "early":
+                    _em_early = (tf_confirmation or {}).get("entry_mode")
+                    if _em_early in ("early", "early_sideways"):
                         _min_early = float(get_trade_config("min_early_score", 70) or 70)
                         if self.decision_engine.min_scalp_score < _min_early:
                             self.decision_engine.min_scalp_score = _min_early
+                        scalp_result = dict(scalp_result or {})
+                        scalp_result["_early_entry"] = True
+                        if _em_early == "early_sideways":
+                            scalp_result["_early_sideways"] = True
                 except Exception:
                     pass
 
@@ -2336,7 +2342,7 @@ class LiveEngine:
                 tf_allowed = bool(tf_confirmation.get("allowed", False)) if tf_confirmation else True
                 _tf_detail = (tf_confirmation or {}).get("reason", "")
                 _em = (tf_confirmation or {}).get("entry_mode")
-                if _em in ("normal", "early"):
+                if _em in ("normal", "early", "early_sideways"):
                     _tf_detail = f"{_tf_detail} | mode={_em}"
                 items.append(self._ck("M5 & M15 searah sinyal", tf_allowed, _tf_detail))
 

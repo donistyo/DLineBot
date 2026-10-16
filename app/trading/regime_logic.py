@@ -88,22 +88,27 @@ def multi_tf_decision(
     signal_direction: str,
     gate_normal: float = 2.0,
     gate_early: float = 1.5,
-    early_min_m5_adx: float = 30.0,
+    early_min_m5_adx: float = 25.0,
+    early_sideways: bool = False,
 ):
     """
     Return: (allow: bool, alignment_score: float, reason: str, entry_mode: str)
-    entry_mode: "normal" | "early" | "block"
+    entry_mode: "normal" | "early" | "early_sideways" | "block"
 
     Aturan:
     - JALUR NORMAL: total skor (M5 + M15) >= gate_normal (2.0) -> allow
         Hanya lolos: TREND+TREND (kedua TF ADX>=30 searah sinyal)
-    - JALUR ENTRY AWAL (Pengaman 1): M5 TREND searah + ADX M5 >=
-        early_min_m5_adx (30) + M15 WEAK searah (total 1.5 >= gate_early)
+    - JALUR ENTRY AWAL (Mode A): M5 ADX >= early_min_m5_adx (25) + EMA M5
+        tersusun searah sinyal + M15 WEAK searah sinyal (EMA20/50 tersusun)
         -> allow dengan entry_mode "early" (skor entry naik ke
-        min_early_score di live_engine)
-    - M15 SIDEWAYS / salah satu TF MELAWAN sinyal -> block keras,
-        apa pun skornya (tidak ada exception)
-    - Sisanya (WEAK+WEAK, TREND+SIDEWAYS, dll) -> block
+        min_early_score di live_engine; exhaustion pakai
+        early_exhaustion_atr di decision_engine)
+    - JALUR EARLY-SIDEWAYS (eksperimen, flag early_sideways_entry):
+        M15 SIDEWAYS + M5 TREND searah + ADX >= early_min_m5_adx -> allow
+        entry_mode "early_sideways" (butuh M1 momentum searah eksplisit
+        + skor >= min_early_score)
+    - TF MELAWAN arah sinyal -> block keras
+    - Sisanya -> block
     """
     score_m5 = _tf_score(regime_m5, signal_direction)
     score_m15 = _tf_score(regime_m15, signal_direction)
@@ -119,21 +124,32 @@ def multi_tf_decision(
         entry_mode = "normal"
     elif (
         not blocked
-        and regime_m5.mode == "TREND"
         and regime_m5.trend == signal_direction
         and regime_m5.adx >= early_min_m5_adx
         and regime_m15.mode == "WEAK"
         and regime_m15.trend == signal_direction
-        and total >= gate_early
     ):
         allow = True
         entry_mode = "early"
+    elif (
+        early_sideways
+        and not blocked
+        and regime_m5.mode == "TREND"
+        and regime_m5.trend == signal_direction
+        and regime_m5.adx >= early_min_m5_adx
+        and regime_m15.mode == "SIDEWAYS"
+        and regime_m15.trend is None
+    ):
+        allow = True
+        entry_mode = "early_sideways"
     else:
         allow = False
         entry_mode = "block"
 
     if entry_mode == "early":
         _tag = " [ENTRY AWAL]"
+    elif entry_mode == "early_sideways":
+        _tag = " [EARLY-SIDEWAYS]"
     else:
         _tag = ""
 

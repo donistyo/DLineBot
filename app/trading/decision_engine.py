@@ -518,6 +518,7 @@ class DecisionEngine:
         # sama dengan sinyal -> jangan kejar.
         # Normal: exhaustion_atr_normal (3.0) x guard_mult
         # Momentum: momentum_exhaustion_atr (4.5).
+        # Early: early_exhaustion_atr (4.5).
         # Filter WAJIB (Pengaman 2).
         # =====================================
         _exh_norm = 3.0
@@ -527,6 +528,12 @@ class DecisionEngine:
         except Exception:
             _exh_norm = 3.0
         _exh_base = _mom_cfg.get("exh", 4.5) if _mom else None
+        if _exh_base is None and (scalp_result or {}).get("_early_entry"):
+            try:
+                from app.config.settings import get_trade_config as _gtc_eea
+                _exh_base = float(_gtc_eea("early_exhaustion_atr", 4.5) or 4.5)
+            except Exception:
+                _exh_base = 4.5
         try:
             _ema_ref = float(scalp_result.get("close", 0) or 0)
             ema50 = None
@@ -654,10 +661,19 @@ class DecisionEngine:
         # jika candle M1 terakhir masih melawan
         # arah, jangan entry (hindari melawan
         # gerakan intraday yang baru terbentuk)
+        # Early-sideways: M1 harus searah EKSPLISIT
+        # (konfirmasi momentum jelas - M15 SIDEWAYS,
+        # jadi M1 jadi satu-satunya penegas arah).
         # =====================================
         try:
             m1 = (scalp_result or {}).get("m1_momentum") or {}
             m1_dir = m1.get("direction")
+            if (scalp_result or {}).get("_early_sideways") and m1_dir != direction:
+                return _reject(
+                    "M1 momentum (early-sideways)",
+                    f"EarlySideways butuh M1 momentum searah eksplisit (M1={m1_dir}, sinyal={direction})",
+                    f"M1 {m1_dir} != {direction}"
+                )
             if m1_dir in ("BUY", "SELL") and m1_dir != direction:
                 return _reject(
                     "M1 momentum",

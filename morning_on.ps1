@@ -1,0 +1,39 @@
+$root = $PSScriptRoot
+$log = Join-Path $root "logs\morning_start.log"
+function Log($m) { "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $m" | Add-Content -Path $log }
+
+Log "=== Morning start dimulai ==="
+
+$up = $false
+try {
+    Invoke-WebRequest -Uri "http://localhost:8000/api/account/status" -TimeoutSec 5 -UseBasicParsing | Out-Null
+    $up = $true
+    Log "Dashboard sudah jalan"
+} catch {
+    Log "Dashboard belum jalan - start_service.bat"
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c", (Join-Path $root "start_service.bat") -WindowStyle Hidden
+}
+
+$deadline = (Get-Date).AddSeconds(120)
+do {
+    Start-Sleep -Seconds 5
+    try {
+        Invoke-WebRequest -Uri "http://localhost:8000/api/account/status" -TimeoutSec 5 -UseBasicParsing | Out-Null
+        $up = $true
+    } catch { $up = $false }
+} while (-not $up -and (Get-Date) -lt $deadline)
+
+if (-not $up) {
+    Log "ERROR: Dashboard tidak merespon setelah 120 detik"
+    exit 1
+}
+
+try {
+    $r = Invoke-RestMethod -Uri "http://localhost:8000/api/auto-trade/do-enable" -TimeoutSec 10
+    Log "Autotrade enabled: $($r | ConvertTo-Json -Compress)"
+} catch {
+    Log "ERROR enable autotrade: $($_.Exception.Message)"
+    exit 1
+}
+
+Log "=== Morning start selesai ==="
