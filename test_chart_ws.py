@@ -91,8 +91,9 @@ check("hash kosong stabil", positions_hash([]) == positions_hash([]))
 # TF map
 # =====================================
 print("=== TF_SECONDS ===")
-check("TF lengkap M1/M5/M15", set(TF_SECONDS.keys()) == {"M1", "M5", "M15"})
-check("nilai detik benar", TF_SECONDS["M1"] == 60 and TF_SECONDS["M5"] == 300 and TF_SECONDS["M15"] == 900)
+check("TF lengkap M1..D1", set(TF_SECONDS.keys()) == {"M1", "M5", "M15", "M30", "H1", "H4", "D1"})
+check("nilai detik benar", TF_SECONDS["M1"] == 60 and TF_SECONDS["M5"] == 300 and TF_SECONDS["M15"] == 900
+      and TF_SECONDS["M30"] == 1800 and TF_SECONDS["H1"] == 3600 and TF_SECONDS["H4"] == 14400 and TF_SECONDS["D1"] == 86400)
 
 print()
 print("=" * 40)

@@ -312,6 +312,8 @@ async def ws_chart(websocket: WebSocket):
             if t == "subscribe":
                 symbol = data.get("symbol") or _active_symbol()
                 tf = data.get("tf") or "M5"
+                if tf not in ("M1", "M5", "M15", "M30", "H1", "H4", "D1"):
+                    tf = "M5"
                 _chart_ws.update_sub(websocket, symbol, tf)
                 if _chart_stream:
                     if symbol != _chart_stream.symbol:
@@ -1967,6 +1969,10 @@ tr:hover td { background:rgba(59,130,246,0.05); }
           <button data-tf="M1" onclick="setChartTF('M1')" class="tfBtn" style="padding:2px 6px;font-size:9px;border-radius:4px;border:1px solid #334155;background:transparent;color:#94a3b8;cursor:pointer">M1</button>
           <button data-tf="M5" onclick="setChartTF('M5')" class="tfBtn" style="padding:2px 6px;font-size:9px;border-radius:4px;border:1px solid #334155;background:#1d4ed8;color:#fff;cursor:pointer">M5</button>
           <button data-tf="M15" onclick="setChartTF('M15')" class="tfBtn" style="padding:2px 6px;font-size:9px;border-radius:4px;border:1px solid #334155;background:transparent;color:#94a3b8;cursor:pointer">M15</button>
+          <button data-tf="M30" onclick="setChartTF('M30')" class="tfBtn" style="padding:2px 6px;font-size:9px;border-radius:4px;border:1px solid #334155;background:transparent;color:#94a3b8;cursor:pointer">M30</button>
+          <button data-tf="H1" onclick="setChartTF('H1')" class="tfBtn" style="padding:2px 6px;font-size:9px;border-radius:4px;border:1px solid #334155;background:transparent;color:#94a3b8;cursor:pointer">H1</button>
+          <button data-tf="H4" onclick="setChartTF('H4')" class="tfBtn" style="padding:2px 6px;font-size:9px;border-radius:4px;border:1px solid #334155;background:transparent;color:#94a3b8;cursor:pointer">H4</button>
+          <button data-tf="D1" onclick="setChartTF('D1')" class="tfBtn" style="padding:2px 6px;font-size:9px;border-radius:4px;border:1px solid #334155;background:transparent;color:#94a3b8;cursor:pointer">D1</button>
         </span>
       </span>
       <span style="margin-left:auto;font-size:10px;color:#fbbf24;display:flex;align-items:center;gap:6px">
@@ -3249,8 +3255,9 @@ let lwSeries = null;
 let lwPriceLines = [];   // [{key, line}] entry/SL/TP
 let lwLiveLine = null;
 let lwMarkers = [];
+const LW_TFS = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'];
 let chartSource = localStorage.getItem('chartSource') || 'mt5';
-let chartTF = localStorage.getItem('chartTF') || 'M5';
+let chartTF = LW_TFS.includes(localStorage.getItem('chartTF')) ? localStorage.getItem('chartTF') : 'M5';
 let lwSymbol = null;
 let chartWS = null;
 let wsRetryDelay = 1000;
@@ -3285,7 +3292,11 @@ function setChartTF(tf) {
     b.style.color = on ? '#fff' : '#94a3b8';
   });
   if (chartSource === 'mt5' && lwChart) {
-    subscribeChartWS(lwSymbol, tf);
+    if (chartWS && chartWS.readyState === WebSocket.OPEN) {
+      try { chartWS.send(JSON.stringify({type: 'subscribe', symbol: lwSymbol, tf: tf})); } catch(e) {}
+    } else {
+      connectChartWS(lwSymbol, tf);
+    }
   }
 }
 

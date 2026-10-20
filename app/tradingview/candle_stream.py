@@ -9,11 +9,16 @@ import time
 
 import MetaTrader5 as mt5
 
-TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900}
+TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800,
+              "H1": 3600, "H4": 14400, "D1": 86400}
 MT5_TF = {
     "M1": mt5.TIMEFRAME_M1,
     "M5": mt5.TIMEFRAME_M5,
     "M15": mt5.TIMEFRAME_M15,
+    "M30": mt5.TIMEFRAME_M30,
+    "H1": mt5.TIMEFRAME_H1,
+    "H4": mt5.TIMEFRAME_H4,
+    "D1": mt5.TIMEFRAME_D1,
 }
 DEFAULT_BARS = 500
 VALID_TFS = tuple(TF_SECONDS.keys())
