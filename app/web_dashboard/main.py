@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, date, timedelta
@@ -7,6 +7,7 @@ import json
 import time
 import functools
 import threading
+import asyncio
 import pandas as pd
 import MetaTrader5 as mt5
 from app.database.session import db_session
@@ -213,10 +214,129 @@ from app.tradingview.webhook import router as tradingview_router
 app.include_router(tradingview_router)
 
 
+# =====================================
+# Chart WebSocket (/ws/chart)
+# Display-only: kegagalan stream tidak
+# mengganggu engine trading.
+# =====================================
+class ChartWSManager:
+    def __init__(self):
+        self._clients = {}  # ws -> {"symbol": str, "tf": str}
+        self._lock = threading.Lock()
+
+    def add(self, ws, symbol, tf):
+        with self._lock:
+            self._clients[ws] = {"symbol": symbol, "tf": tf}
+
+    def remove(self, ws):
+        with self._lock:
+            self._clients.pop(ws, None)
+
+    def update_sub(self, ws, symbol, tf):
+        with self._lock:
+            if ws in self._clients:
+                self._clients[ws] = {"symbol": symbol, "tf": tf}
+
+    def targets(self, msg_type):
+        with self._lock:
+            return list(self._clients.items())
+
+    def count(self):
+        with self._lock:
+            return len(self._clients)
+
+
+_chart_ws = ChartWSManager()
+_chart_stream = None
+_chart_loop = None
+
+
+def _start_chart_stream():
+    global _chart_stream
+    try:
+        from app.tradingview.candle_stream import CandleStream
+
+        def _on_message(msg):
+            # Dispatch dari thread stream ke event loop uvicorn
+            if _chart_loop is None or not _chart_loop.is_running():
+                return
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    _chart_broadcast(msg), _chart_loop)
+            except Exception:
+                pass
+
+        sym = _active_symbol()
+        _chart_stream = CandleStream(
+            symbol=sym,
+            on_message=_on_message,
+            positions_provider=get_cached_positions,
+        )
+        _chart_stream.start()
+        print(f"[CHART-WS] stream started for {sym}")
+    except Exception as e:
+        print(f"[CHART-WS] stream gagal start: {e}")
+
+
+async def _chart_broadcast(msg):
+    """Kirim pesan ke semua WS client yang cocok filter-nya."""
+    dead = []
+    for ws, sub in _chart_ws.targets(msg.get("type", "")):
+        try:
+            t = msg.get("type")
+            if t == "bar" and sub.get("tf") and msg.get("tf") != sub["tf"]:
+                continue
+            if t in ("snapshot",):
+                continue
+            await ws.send_json(msg)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _chart_ws.remove(ws)
+
+
+@app.websocket("/ws/chart")
+async def ws_chart(websocket: WebSocket):
+    await websocket.accept()
+    symbol = _active_symbol()
+    tf = "M5"
+    _chart_ws.add(websocket, symbol, tf)
+    try:
+        # Snapshot awal
+        if _chart_stream:
+            snap = _chart_stream.snapshot(symbol, tf)
+            await websocket.send_json(snap)
+        while True:
+            data = await websocket.receive_json()
+            t = data.get("type")
+            if t == "subscribe":
+                symbol = data.get("symbol") or _active_symbol()
+                tf = data.get("tf") or "M5"
+                _chart_ws.update_sub(websocket, symbol, tf)
+                if _chart_stream:
+                    if symbol != _chart_stream.symbol:
+                        await asyncio.to_thread(_chart_stream.set_symbol, symbol)
+                    snap = _chart_stream.snapshot(symbol, tf)
+                    await websocket.send_json(snap)
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        _chart_ws.remove(websocket)
+
+
+@app.on_event("startup")
+async def _startup_async():
+    global _chart_loop
+    _chart_loop = asyncio.get_running_loop()
+
+
 @app.on_event("startup")
 def _startup():
     _start_mt5_cache()
     _start_learning_loop()
+    _start_chart_stream()
 
 
 app.add_middleware(
@@ -1329,6 +1449,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <link rel="icon" href="/favicon" type="image/png">
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3"></script>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 body { font-family:'Inter','Segoe UI',sans-serif; background:linear-gradient(135deg,#0c1222 0%,#1a1a2e 50%,#16213e 100%); color:#e2e8f0; min-height:100vh; }
@@ -1839,8 +1960,17 @@ tr:hover td { background:rgba(59,130,246,0.05); }
   <div class="tv-chart">
     <div class="tv-signal-head">
       <span class="lbl">Chart — <span id="tvSymbolTitle">XAUUSDc</span></span>
-      <span class="lbl" style="color:#60a5fa">TradingView</span>
-      <span style="margin-left:auto;font-size:10px;color:#fbbf24;display:flex;align-items:center;gap:4px">
+      <span class="lbl" id="chartSourceWrap" style="display:flex;align-items:center;gap:6px">
+        <button id="btnSrcMT5" onclick="setChartSource('mt5')" style="padding:2px 8px;font-size:9px;border-radius:4px;border:1px solid #334155;background:#1d4ed8;color:#fff;cursor:pointer">MT5-Live</button>
+        <button id="btnSrcTV" onclick="setChartSource('tv')" style="padding:2px 8px;font-size:9px;border-radius:4px;border:1px solid #334155;background:transparent;color:#94a3b8;cursor:pointer">TV Publik</button>
+        <span id="tfBtns" style="display:flex;gap:2px;margin-left:4px">
+          <button data-tf="M1" onclick="setChartTF('M1')" class="tfBtn" style="padding:2px 6px;font-size:9px;border-radius:4px;border:1px solid #334155;background:transparent;color:#94a3b8;cursor:pointer">M1</button>
+          <button data-tf="M5" onclick="setChartTF('M5')" class="tfBtn" style="padding:2px 6px;font-size:9px;border-radius:4px;border:1px solid #334155;background:#1d4ed8;color:#fff;cursor:pointer">M5</button>
+          <button data-tf="M15" onclick="setChartTF('M15')" class="tfBtn" style="padding:2px 6px;font-size:9px;border-radius:4px;border:1px solid #334155;background:transparent;color:#94a3b8;cursor:pointer">M15</button>
+        </span>
+      </span>
+      <span style="margin-left:auto;font-size:10px;color:#fbbf24;display:flex;align-items:center;gap:6px">
+        <span id="wsChip" style="font-size:9px;color:#64748b">WS: -</span>
         <span style="width:6px;height:6px;border-radius:50%;background:#fbbf24;display:inline-block;animation:blink 1s infinite"></span>
         LIVE MT5 <span id="tvLiveTs" style="color:#94a3b8">—</span>
       </span>
@@ -3112,6 +3242,246 @@ async function addSavedAccount() {
   }
 }
 // =====================================
+// Chart lokal (Lightweight Charts) + WebSocket
+// =====================================
+let lwChart = null;
+let lwSeries = null;
+let lwPriceLines = [];   // [{key, line}] entry/SL/TP
+let lwLiveLine = null;
+let lwMarkers = [];
+let chartSource = localStorage.getItem('chartSource') || 'mt5';
+let chartTF = localStorage.getItem('chartTF') || 'M5';
+let lwSymbol = null;
+let chartWS = null;
+let wsRetryDelay = 1000;
+let wsReconnectTimer = null;
+let wsLastTickTs = 0;
+
+function setChartSource(src) {
+  chartSource = src;
+  localStorage.setItem('chartSource', src);
+  const b5 = document.getElementById('btnSrcMT5');
+  const bv = document.getElementById('btnSrcTV');
+  const tfb = document.getElementById('tfBtns');
+  if (b5) { b5.style.background = src === 'mt5' ? '#1d4ed8' : 'transparent'; b5.style.color = src === 'mt5' ? '#fff' : '#94a3b8'; }
+  if (bv) { bv.style.background = src === 'tv' ? '#1d4ed8' : 'transparent'; bv.style.color = src === 'tv' ? '#fff' : '#94a3b8'; }
+  if (tfb) tfb.style.display = src === 'mt5' ? 'flex' : 'none';
+  const sym = (window._tvMonData && window._tvMonData.symbol) || 'XAUUSDc';
+  if (src === 'mt5') {
+    initLWChart(sym, chartTF);
+  } else {
+    destroyLWChart();
+    disconnectChartWS();
+    initTVChart(sym, {force: true});
+  }
+}
+
+function setChartTF(tf) {
+  chartTF = tf;
+  localStorage.setItem('chartTF', tf);
+  document.querySelectorAll('.tfBtn').forEach(b => {
+    const on = b.dataset.tf === tf;
+    b.style.background = on ? '#1d4ed8' : 'transparent';
+    b.style.color = on ? '#fff' : '#94a3b8';
+  });
+  if (chartSource === 'mt5' && lwChart) {
+    subscribeChartWS(lwSymbol, tf);
+  }
+}
+
+function initLWChart(symbol, tf) {
+  const el = document.getElementById('tv_chart');
+  if (!el || !window.LightweightCharts) return;
+  destroyLWChart();
+  el.innerHTML = '';
+  lwChart = LightweightCharts.createChart(el, {
+    autoSize: true,
+    height: 600,
+    layout: { background: { color: '#0c1222' }, textColor: '#c8d2e8' },
+    grid: { vertLines: { color: 'rgba(148,163,184,0.08)' }, horzLines: { color: 'rgba(148,163,184,0.08)' } },
+    rightPriceScale: { borderColor: '#334155' },
+    timeScale: { borderColor: '#334155', timeVisible: true, secondsVisible: false },
+    localization: { timeZone: 'Asia/Jakarta' },
+  });
+  lwSeries = lwChart.addCandlestickSeries({
+    upColor: '#22c55e', downColor: '#ef4444',
+    borderUpColor: '#22c55e', borderDownColor: '#ef4444',
+    wickUpColor: '#22c55e', wickDownColor: '#ef4444',
+  });
+  lwSymbol = symbol;
+  lwPriceLines = [];
+  lwLiveLine = null;
+  connectChartWS(symbol, tf);
+}
+
+function destroyLWChart() {
+  lwPriceLines.forEach(p => { try { lwSeries.removePriceLine(p.line); } catch(e) {} });
+  lwPriceLines = [];
+  lwLiveLine = null;
+  lwMarkers = [];
+  if (lwChart) { try { lwChart.remove(); } catch(e) {} }
+  lwChart = null;
+  lwSeries = null;
+}
+
+function lwSetBars(bars) {
+  if (!lwSeries || !bars) return;
+  lwSeries.setData(bars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
+  if (lwChart && bars.length) lwChart.timeScale().fitContent();
+}
+
+function lwUpdateBar(bar) {
+  if (!lwSeries || !bar) return;
+  lwSeries.update({ time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close });
+}
+
+function lwSetLive(tick) {
+  if (!lwSeries || !tick || !tick.bid) return;
+  try {
+    if (lwLiveLine) lwSeries.removePriceLine(lwLiveLine);
+  } catch(e) {}
+  lwLiveLine = lwSeries.createPriceLine({
+    price: tick.bid,
+    color: '#fbbf24', lineWidth: 2, lineStyle: 0,
+    title: 'LIVE', axisLabelVisible: true,
+  });
+  const ts = document.getElementById('tvLiveTs');
+  if (ts && tick.time) ts.textContent = new Date(tick.time * 1000).toLocaleTimeString('id-ID');
+}
+
+function lwSetPositionLines(positions) {
+  if (!lwSeries) return;
+  lwPriceLines.forEach(p => { try { lwSeries.removePriceLine(p.line); } catch(e) {} });
+  lwPriceLines = [];
+  if (!positions || !positions.length) return;
+  const COLORS = ['#60a5fa', '#a78bfa'];
+  positions.forEach((p, idx) => {
+    const entryLine = lwSeries.createPriceLine({
+      price: p.open_price, color: COLORS[idx % 2], lineWidth: 1, lineStyle: 0,
+      title: '#' + p.ticket + ' Entry', axisLabelVisible: true,
+    });
+    lwPriceLines.push({key: 'entry-' + p.ticket, line: entryLine});
+    if (p.sl) {
+      const sl = lwSeries.createPriceLine({
+        price: p.sl, color: '#ef4444', lineWidth: 1, lineStyle: 2,
+        title: 'SL', axisLabelVisible: false,
+      });
+      lwPriceLines.push({key: 'sl-' + p.ticket, line: sl});
+    }
+    if (p.tp) {
+      const tp = lwSeries.createPriceLine({
+        price: p.tp, color: '#22c55e', lineWidth: 1, lineStyle: 2,
+        title: 'TP', axisLabelVisible: false,
+      });
+      lwPriceLines.push({key: 'tp-' + p.ticket, line: tp});
+    }
+  });
+  updateTVPositionLabels(positions);
+}
+
+function lwSetMarkers(signals) {
+  if (!lwSeries || !signals) return;
+  try {
+    const markers = signals.slice(-20).filter(s => s.price && s.timestamp).map(s => ({
+      time: s.timestamp,
+      position: s.signal === 'BUY' ? 'belowBar' : 'aboveBar',
+      color: s.signal === 'BUY' ? '#22c55e' : '#ef4444',
+      shape: s.signal === 'BUY' ? 'arrowUp' : 'arrowDown',
+      text: s.signal + (s.grade && s.grade !== '-' ? ' ' + s.grade : ''),
+    })).sort((a, b) => a.time - b.time);
+    lwSeries.setMarkers(markers);
+    lwMarkers = markers;
+  } catch(e) {}
+}
+
+function updateWSChip(state, detail) {
+  const chip = document.getElementById('wsChip');
+  if (!chip) return;
+  const colors = {on: '#22c55e', off: '#ef4444', retry: '#fbbf24'};
+  chip.style.color = colors[state] || '#64748b';
+  chip.textContent = 'WS: ' + (detail || state.toUpperCase());
+}
+
+function connectChartWS(symbol, tf) {
+  disconnectChartWS();
+  if (chartSource !== 'mt5') return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = proto + '//' + location.host + '/ws/chart';
+  try {
+    chartWS = new WebSocket(url);
+  } catch(e) {
+    updateWSChip('off', 'gagal');
+    scheduleWSReconnect(symbol, tf);
+    return;
+  }
+  chartWS.onopen = () => {
+    wsRetryDelay = 1000;
+    updateWSChip('on', 'ON');
+    try { chartWS.send(JSON.stringify({type: 'subscribe', symbol: symbol || lwSymbol, tf: tf || chartTF})); } catch(e) {}
+  };
+  chartWS.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'snapshot') {
+        lwSymbol = msg.symbol;
+        lwSetBars(msg.bars || []);
+        if (msg.tick) lwSetLive(msg.tick);
+        lwSetPositionLines(msg.positions || []);
+        lwSetMarkers(msg.signals || []);
+        wsLastTickTs = Date.now();
+      } else if (msg.type === 'bar') {
+        lwUpdateBar(msg.bar);
+      } else if (msg.type === 'tick') {
+        lwSetLive(msg);
+        wsLastTickTs = Date.now();
+        const age = Math.round((Date.now() - wsLastTickTs) / 1000);
+        updateWSChip('on', 'ON ' + new Date(msg.time * 1000).toLocaleTimeString('id-ID'));
+      } else if (msg.type === 'positions') {
+        lwSetPositionLines(msg.positions || []);
+      } else if (msg.type === 'signals') {
+        lwSetMarkers(msg.signals || []);
+      }
+    } catch(e) {}
+  };
+  chartWS.onclose = () => {
+    chartWS = null;
+    updateWSChip('off', 'OFF');
+    scheduleWSReconnect(lwSymbol, tf);
+  };
+  chartWS.onerror = () => {
+    try { chartWS.close(); } catch(e) {}
+  };
+}
+
+function scheduleWSReconnect(symbol, tf) {
+  if (wsReconnectTimer) return;
+  updateWSChip('retry', 'RECONNECT ' + Math.round(wsRetryDelay / 1000) + 's');
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null;
+    if (chartSource === 'mt5') connectChartWS(symbol || lwSymbol, tf || chartTF);
+  }, wsRetryDelay);
+  wsRetryDelay = Math.min(wsRetryDelay * 2, 10000);
+}
+
+function disconnectChartWS() {
+  if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+  wsRetryDelay = 1000;
+  if (chartWS) {
+    chartWS.onclose = null;
+    try { chartWS.close(); } catch(e) {}
+    chartWS = null;
+  }
+}
+
+// Init chart source sesuai preferensi tersimpan
+(function() {
+  document.addEventListener('DOMContentLoaded', () => {
+    setChartSource(chartSource);
+    setChartTF(chartTF);
+  });
+})();
+
+// =====================================
 // TradingView tab
 // =====================================
 let tvWidget = null;
@@ -3148,6 +3518,11 @@ function tvConfig(symbol, interval, style) {
 }
 
 function initTVChart(symbol, opts) {
+  if (chartSource === 'mt5') {
+    // chart lokal aktif: sinkronkan symbol bila berubah
+    if (symbol && symbol !== lwSymbol) initLWChart(symbol, chartTF);
+    return;
+  }
   opts = opts || {};
   const force = !!opts.force;
   const interval = opts.interval || localStorage.getItem('tv_interval') || '1';
@@ -3334,8 +3709,9 @@ function updateTVLivePrice(tick) {
   } catch(e) {}
 }
 
-// Fetch live price from MT5 every 2 seconds and update chart
+// Fetch live price from MT5 every 2 seconds (mode TV publik saja; mode MT5 pakai WS)
 setInterval(async () => {
+  if (chartSource !== 'tv') return;
   try {
     const res = await fetch('/api/tick');
     const data = await res.json();
@@ -3379,8 +3755,9 @@ function drawTVSignalMarkers(signals) {
   } catch(e) { console.error('TV signal markers:', e); }
 }
 
-// Fetch signal history every 10 seconds
+// Fetch signal history every 10 seconds (mode TV publik saja; mode MT5 pakai WS)
 setInterval(async () => {
+  if (chartSource !== 'tv') return;
   try {
     const res = await fetch('/api/signals');
     const data = await res.json();
@@ -3390,11 +3767,12 @@ setInterval(async () => {
   } catch(e) {}
 }, 10000);
 
-// Redraw position lines + labels every 5 seconds
+// Redraw position lines + labels every 5 seconds (garis widget TV hanya mode TV;
+// mode MT5 garis diurus WS + label tetap di-refresh dari data monitor)
 setInterval(() => {
   const mon = window._tvMonData;
   if (mon && mon.positions && mon.positions.length) {
-    drawTVPositionLines(mon.positions);
+    if (chartSource === 'tv') drawTVPositionLines(mon.positions);
     updateTVPositionLabels(mon.positions);
   } else {
     clearTVPositionLabels();
