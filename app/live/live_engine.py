@@ -99,6 +99,7 @@ from app.live.score_view import ScoreView
 from app.trading.learning_manager import LearningManager
 from app.trading.fundamental_trader import FundamentalTrader
 from app.trading.grid_manager import GridManager
+from app.trading.hybrid_routing import hybrid_strategy_state
 
 
 class LiveEngine:
@@ -345,6 +346,7 @@ class LiveEngine:
             emergency_max_usd=float(get_trade_config("emergency_max_usd", 0.0)),
             recover_red_usd=float(get_trade_config("recover_red_usd", 1.0)),
             recover_close_usd=float(get_trade_config("recover_close_usd", 0.25)),
+            zone_time_exit_min=float(get_trade_config("zone_time_exit_min", 90) or 0),
         )
 
         self.break_even = BreakEvenManager(
@@ -580,10 +582,10 @@ class LiveEngine:
     # Decision
     # =====================================
 
-    def decide(self, prediction, scalp_result=None, regime=None, higher_trend=None, higher_adx=0):
+    def decide(self, prediction, scalp_result=None, regime=None, higher_trend=None, higher_adx=0, strategy=None):
 
         return self.decision_engine.decide(
-            prediction, scalp_result, regime, higher_trend, higher_adx
+            prediction, scalp_result, regime, higher_trend, higher_adx, strategy=strategy
         )
 
     # =====================================
@@ -829,6 +831,11 @@ class LiveEngine:
 
             MarketRegimeView.show(regime)
 
+            # Strategi efektif cycle ini (hybrid: SCALP/ZONE dengan
+            # hysteresis ADX). Dipakai konsisten oleh analyze, routing
+            # decision, gate TF, dan checklist.
+            _eff_strategy = self._effective_strategy(regime)
+
             # ===============================
             # Fundamental Daily
             # ===============================
@@ -909,7 +916,7 @@ class LiveEngine:
             # tersimpan di scalp_result["bbma"].
             # ===============================
             try:
-                if _entry_eval_now and self._entry_strategy() == "bbma":
+                if _entry_eval_now and _eff_strategy == "bbma":
                     from app.trading import bbma_strategy
                     scalp_result["bbma"] = bbma_strategy.analyze(self.symbol)
             except Exception as _bbma_exc:
@@ -928,7 +935,7 @@ class LiveEngine:
             # Tidak butuh tren - untuk ranging.
             # ===============================
             try:
-                if _entry_eval_now and self._entry_strategy() == "zone":
+                if _entry_eval_now and _eff_strategy == "zone":
                     from app.trading import zone_strategy
                     scalp_result["zone"] = zone_strategy.analyze(self.symbol)
             except Exception as _zone_exc:
@@ -1038,6 +1045,7 @@ class LiveEngine:
                     regime,
                     higher_trend,
                     higher_adx,
+                    strategy=_eff_strategy,
                 )
 
                 DecisionView.show(
@@ -1232,7 +1240,10 @@ class LiveEngine:
                 self.ai_exit.cleanup(active_tickets)
                 self.atr_protection.cleanup(active_tickets)
 
+                _zone_magic = self._zone_magic()
                 for position in positions:
+
+                    _is_zone_pos = int(getattr(position, "magic", 0) or 0) == _zone_magic
 
                     _use_atr_mode = True
                     try:
@@ -1253,7 +1264,8 @@ class LiveEngine:
                         except Exception:
                             pass
                         ap_result = self.atr_protection.process(
-                            position, _atr_now, float(last["close"])
+                            position, _atr_now, float(last["close"]),
+                            is_zone=_is_zone_pos,
                         )
                         ExitView.show(ap_result)
                         if ap_result["status"] in ("CLOSED", "PARTIAL"):
@@ -1269,29 +1281,34 @@ class LiveEngine:
                         ts_result = self.trailing.process(position)
                         ExitView.show(ts_result)
 
-                    exit_result = self.exit_manager.process(
-                        position,
-                        prediction
-                    )
-                    ExitView.show(exit_result)
+                    # Exit khusus zone: hanya ATRProtection (SL server,
+                    # TP mid-range, emergency, time-exit) yang mengelola.
+                    # ExitManager/smart-position/recovery/AI-exit khusus
+                    # scalp tidak boleh menutup posisi zone lebih awal.
+                    if not _is_zone_pos:
+                        exit_result = self.exit_manager.process(
+                            position,
+                            prediction
+                        )
+                        ExitView.show(exit_result)
 
-                    recovery_result = self._check_recovery_close(position)
-                    if recovery_result:
-                        RecoveryExitView.show(recovery_result)
-                        continue
+                        recovery_result = self._check_recovery_close(position)
+                        if recovery_result:
+                            RecoveryExitView.show(recovery_result)
+                            continue
 
-                    sp_result = self.smart_position.process(
-                        position, prediction, regime, last
-                    )
-                    SmartPositionView.show(sp_result)
+                        sp_result = self.smart_position.process(
+                            position, prediction, regime, last
+                        )
+                        SmartPositionView.show(sp_result)
 
-                    time_exit_result = self.time_exit.process(position)
-                    TimeExitView.show(time_exit_result)
+                        time_exit_result = self.time_exit.process(position)
+                        TimeExitView.show(time_exit_result)
 
-                    ai_exit_result = self.ai_exit.process(
-                        position, prediction, last
-                    )
-                    AIExitView.show(ai_exit_result)
+                        ai_exit_result = self.ai_exit.process(
+                            position, prediction, last
+                        )
+                        AIExitView.show(ai_exit_result)
 
                     if position.ticket in self._recovery_seen:
                         # Safety limit: kalau loss > -60, baru emergency close
@@ -1392,7 +1409,7 @@ class LiveEngine:
             except Exception:
                 pass
 
-            if self._entry_strategy() in ("bbma", "zone"):
+            if _eff_strategy in ("bbma", "zone"):
                 # Gate multi-TF lama dibypass: konfirmasi M15 sudah
                 # menjadi syarat wajib di dalam BBMA analyze();
                 # zone entry memang untuk ranging (tidak butuh tren).
@@ -1451,6 +1468,7 @@ class LiveEngine:
                     session_result=session_result,
                     scalp_result=scalp_result,
                     regime=regime,
+                    entry_strategy=_eff_strategy,
                 )
 
             if can_trade:
@@ -1465,6 +1483,7 @@ class LiveEngine:
             RiskView.show(risk)
 
             if risk:
+                _cfg = {}
                 try:
                     with open("runtime/trade_config.json") as _f:
                         _cfg = json.load(_f)
@@ -1537,9 +1556,37 @@ class LiveEngine:
                 # SL+ mode: fallback (<5 layer) dibuka TANPA SL (tahan floating).
                 # SL dikunci di entry +/- sl_plus_usd oleh ATRProtection
                 # saat profit >= sl_plus + buffer; exit = server TP / SL+ / emergency.
-                _layers_sl = int(decision.get("entry_layers") or 2)
-                if _layers_sl <= 2 and _sl_plus > 0:
-                    risk["stop_loss"] = 0.0
+                #
+                # EXIT KHUSUS ZONE: SL struktural di luar tepi zona,
+                # TP di mid-range, magic khusus (zone_magic) supaya
+                # exit engine bisa membedakan posisi zone dari scalp.
+                # Mode zero-SL/SL+ TIDAK berlaku untuk zone.
+                _is_zone_entry = str(decision.get("entry_strategy") or "").lower() == "zone"
+                if _is_zone_entry:
+                    _z_sl_atr = float(_cfg.get("zone_sl_atr", 0.6) or 0.6)
+                    _z_lo = float(decision.get("zone_lo") or 0)
+                    _z_hi = float(decision.get("zone_hi") or 0)
+                    _z_mid = float(decision.get("range_mid") or 0)
+                    _entry_p = float(risk.get("entry_price") or last["close"])
+                    _a = _atr_now if _atr_now > 0 else 0.0
+                    if decision["action"] == "BUY":
+                        _z_sl = (_z_lo - _z_sl_atr * _a) if _z_lo > 0 else (_entry_p - _z_sl_atr * _a)
+                        _z_tp = _z_mid if _z_mid > _entry_p else 0.0
+                    else:
+                        _z_sl = (_z_hi + _z_sl_atr * _a) if _z_hi > 0 else (_entry_p + _z_sl_atr * _a)
+                        _z_tp = _z_mid if 0 < _z_mid < _entry_p else 0.0
+                    risk["stop_loss"] = round(_z_sl, 5) if _a > 0 else 0.0
+                    risk["take_profit"] = round(_z_tp, 5) if _z_tp else 0.0
+                    risk["magic"] = int(_cfg.get("zone_magic", 10003) or 10003)
+                    risk["entry_strategy"] = "zone"
+                    risk["zone_lo"] = _z_lo
+                    risk["zone_hi"] = _z_hi
+                    risk["zone_mid"] = _z_mid
+                else:
+                    risk["magic"] = int(_cfg.get("magic", 10001) or 10001)
+                    _layers_sl = int(decision.get("entry_layers") or 2)
+                    if _layers_sl <= 2 and _sl_plus > 0:
+                        risk["stop_loss"] = 0.0
 
             # ===============================
             # AI Trade Score
@@ -1659,7 +1706,7 @@ class LiveEngine:
 
                 }
 
-            elif self._entry_strategy() not in ("bbma", "zone") and tf_confirmation and not tf_confirmation.get("allowed", False):
+            elif _eff_strategy not in ("bbma", "zone") and tf_confirmation and not tf_confirmation.get("allowed", False):
 
                 result = {
 
@@ -2190,6 +2237,37 @@ class LiveEngine:
         except Exception:
             return "scalp"
 
+    def _effective_strategy(self, regime=None):
+        """Strategi entry efektif cycle ini.
+
+        Mode 'scalp'/'bbma'/'zone' -> langsung.
+        Mode 'hybrid' -> ZONE saat ADX < zone_regime_adx_max (20),
+        SCALP saat ADX > scalp_resume_adx (25); di antara kedua
+        ambang pertahankan state terakhir (hysteresis, anti flip-flop).
+        """
+        mode = self._entry_strategy()
+        if mode != "hybrid":
+            return mode
+        try:
+            _zone_max = float(get_trade_config("zone_regime_adx_max", 20) or 20)
+            _scalp_min = float(get_trade_config("scalp_resume_adx", 25) or 25)
+            _adx = float((regime or {}).get("adx", 0) or 0)
+        except Exception:
+            _zone_max, _scalp_min, _adx = 20.0, 25.0, 0.0
+        _state = hybrid_strategy_state(
+            "hybrid", _adx, getattr(self, "_hybrid_strategy", None),
+            zone_max=_zone_max, scalp_resume=_scalp_min,
+        )
+        self._hybrid_strategy = _state
+        return _state
+
+    def _zone_magic(self):
+        try:
+            with open("runtime/trade_config.json") as _f:
+                return int(json.load(_f).get("zone_magic", 10003) or 10003)
+        except Exception:
+            return 10003
+
     # =====================================
     # Equity floor: dipakai bersama oleh
     # can_trade dan entry checklist supaya
@@ -2217,7 +2295,7 @@ class LiveEngine:
     def _write_entry_checklist(self, can_trade, decision, filter_result, daily_result,
                                position_result, tf_confirmation, reentry_reason,
                                same_dir_reason, atr_filter_ok, atr_filter_reason,
-                               session_result, scalp_result, regime):
+                               session_result, scalp_result, regime, entry_strategy=None):
         try:
             score_data = (scalp_result or {}).get("scalp_score", {}) or {}
             score = score_data.get("score", 0)
@@ -2237,8 +2315,18 @@ class LiveEngine:
             items = []
             items.append(self._ck("Autotrade ON", self._auto_trade_enabled, None))
 
-            _bbma_mode = self._entry_strategy() == "bbma"
-            _zone_mode = self._entry_strategy() == "zone"
+            _active_strategy = str(entry_strategy or self._entry_strategy()).lower()
+            _bbma_mode = _active_strategy == "bbma"
+            _zone_mode = _active_strategy == "zone"
+            _reg_mode = (regime or {}).get("mode", "-")
+            _reg_adx = float((regime or {}).get("adx", 0) or 0)
+            items.append(self._ck(
+                f"Strategi aktif: {_active_strategy.upper()}",
+                True,
+                f"regime {_reg_mode}, ADX {_reg_adx:.1f}" + (
+                    " (hybrid)" if self._entry_strategy() == "hybrid" else ""
+                ),
+            ))
 
             equity_floor_ok, _equity_now, floor = self._equity_floor_state()
             items.append(self._ck(

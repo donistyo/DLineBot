@@ -144,6 +144,9 @@ class DecisionEngine:
             "zone_lo": (zone.get("zone") or {}).get("lo"),
             "zone_hi": (zone.get("zone") or {}).get("hi"),
             "zone_dist_atr": dist,
+            "range_mid": zone.get("range_mid"),
+            "zone_atr": zone.get("atr"),
+            "close": zone.get("close"),
         }
         checks = []
 
@@ -185,6 +188,27 @@ class DecisionEngine:
                               f"RSI oversold ({rsi:.1f} < {100.0 - _hard:.0f}) - jangan jual di lembah",
                               f"RSI {rsi:.1f}")
             _zok("Zone RSI keras", f"RSI {rsi:.1f}")
+
+        # TP mid-range: wajib ada ruang profit ke tengah range.
+        # Exit khusus zone menaruh TP di mid-range; kalau jarak
+        # entry->mid < zone_tp_min_atr maka risk/reward terlalu tipis.
+        _rmid = zone.get("range_mid")
+        _zclose = zone.get("close")
+        _zatr = zone.get("atr")
+        try:
+            _tpmin = float(get_trade_config("zone_tp_min_atr", 0.5) or 0.5)
+        except Exception:
+            _tpmin = 0.5
+        if _rmid and _zclose and _zatr and float(_zatr) > 0:
+            if direction == "BUY":
+                _room = (float(_rmid) - float(_zclose)) / float(_zatr)
+            else:
+                _room = (float(_zclose) - float(_rmid)) / float(_zatr)
+            if _room < _tpmin:
+                return _zfail("Zone TP mid-range",
+                              f"Ruang ke mid-range {_room:.2f}xATR (< {_tpmin:.2f}) - TP terlalu dekat",
+                              f"{_room:.2f} < {_tpmin:.2f} xATR")
+            _zok("Zone TP mid-range", f"{_room:.2f}xATR ke mid {float(_rmid):.2f}")
 
         # Validasi ulang jarak zona (defense-in-depth terhadap analyze)
         if dist is not None:
@@ -231,14 +255,16 @@ class DecisionEngine:
             "checks": checks,
         }
 
-    def decide(self, prediction=None, scalp_result=None, regime=None, higher_trend=None, higher_adx=0) -> dict:
-        if self._entry_strategy() == "bbma":
+    def decide(self, prediction=None, scalp_result=None, regime=None, higher_trend=None, higher_adx=0, strategy=None) -> dict:
+        strat = str(strategy or self._entry_strategy() or "scalp").lower()
+        if strat == "bbma":
             return self._decide_bbma(scalp_result)
-        if self._entry_strategy() == "zone":
+        if strat == "zone":
             return self._decide_zone(scalp_result)
 
         if scalp_result is None or regime is None:
-            return {"action": "NO_TRADE", "reason": "Data tidak tersedia", "confidence": 0, "checks": []}
+            return {"action": "NO_TRADE", "reason": "Data tidak tersedia", "confidence": 0,
+                    "entry_strategy": "scalp", "checks": []}
 
         score_data = scalp_result.get("scalp_score", {})
         score = score_data.get("score", 0)
@@ -264,6 +290,7 @@ class DecisionEngine:
                 "confidence": score / 100,
                 "score": score,
                 "grade": grade,
+                "entry_strategy": "scalp",
                 "checks": checks
             }
 
@@ -870,5 +897,6 @@ class DecisionEngine:
             "entry_layers": _entry_layers,
             "tier_reason": _tier_reason,
             "momentum_mode": _mom,
+            "entry_strategy": "scalp",
             "checks": checks
         }

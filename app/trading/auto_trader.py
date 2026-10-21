@@ -52,7 +52,7 @@ def resolve_entry_copies(decision, fallback):
 
 def _save_signal_history(signal, price, sl, tp, score=0, grade="-", reason="", pos_pct=None, entry_layers=None, tier_reason=None,
                          entry_strategy=None, bbma_slope=None, bbma_dist_mid=None,
-                         confirm_hold_s=None, confirm_hold_cycles=None):
+                         confirm_hold_s=None, confirm_hold_cycles=None, tickets=None):
     """Simpan history signal ke file untuk ditampilkan di chart.
 
     Field BBMA (entry_strategy/bbma_slope/bbma_dist_mid) dicatat di tiap
@@ -80,6 +80,7 @@ def _save_signal_history(signal, price, sl, tp, score=0, grade="-", reason="", p
             "entry_layers": entry_layers,
             "tier_reason": tier_reason,
             "entry_strategy": entry_strategy,
+            "tickets": tickets or [],
             "bbma_slope": bbma_slope,
             "bbma_dist_mid": bbma_dist_mid,
             "confirm_hold_s": confirm_hold_s,
@@ -176,18 +177,22 @@ class AutoTrader:
 
         signal = decision["action"]
         copies = resolve_entry_copies(decision, self._entry_copies())
+        try:
+            _magic = int(decision.get("magic") or risk.get("magic") or 10001)
+        except Exception:
+            _magic = 10001
         requests = []
         for i in range(copies):
             comment = f"DLineBot #{i + 1}" if copies > 1 else "DLineBot"
             if signal == "BUY":
                 requests.append(self.order_builder.buy(
                     symbol, risk["lot_size"], risk["entry_price"],
-                    risk["stop_loss"], risk["take_profit"], comment=comment
+                    risk["stop_loss"], risk["take_profit"], magic=_magic, comment=comment
                 ))
             elif signal == "SELL":
                 requests.append(self.order_builder.sell(
                     symbol, risk["lot_size"], risk["entry_price"],
-                    risk["stop_loss"], risk["take_profit"], comment=comment
+                    risk["stop_loss"], risk["take_profit"], magic=_magic, comment=comment
                 ))
             else:
                 return {"status": "SKIPPED", "reason": f"Unknown signal: {signal}"}
@@ -221,6 +226,14 @@ class AutoTrader:
             })
 
         all_success = all(r["success"] for r in results)
+        tickets = []
+        for _r in results:
+            _res = _r.get("result") if isinstance(_r, dict) else None
+            if _r.get("success") and isinstance(_res, dict) and _res.get("order"):
+                try:
+                    tickets.append(int(_res["order"]))
+                except Exception:
+                    pass
         # Simpan signal history + kirim alert ke TV jika order berhasil
         if all_success:
             _save_signal_history(
@@ -239,6 +252,7 @@ class AutoTrader:
                 bbma_dist_mid=decision.get("bbma_dist_mid"),
                 confirm_hold_s=decision.get("confirm_hold_s"),
                 confirm_hold_cycles=decision.get("confirm_hold_cycles"),
+                tickets=tickets,
             )
             _send_tv_alert(
                 action=signal,

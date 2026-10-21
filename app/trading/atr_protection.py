@@ -35,6 +35,7 @@ class ATRProtectionManager:
         emergency_max_usd=0.0,
         recover_red_usd=0.0,
         recover_close_usd=0.0,
+        zone_time_exit_min=90.0,
     ):
         self.sl_atr_mult = sl_atr_mult
         self.be_trigger_atr = be_trigger_atr
@@ -63,6 +64,7 @@ class ATRProtectionManager:
         self.emergency_max_usd = emergency_max_usd
         self.recover_red_usd = recover_red_usd
         self.recover_close_usd = recover_close_usd
+        self.zone_time_exit_min = zone_time_exit_min
 
         self.controller = PositionController()
         self._partial_done = set()
@@ -115,7 +117,7 @@ class ATRProtectionManager:
                     "new_stop_loss": new_sl, "result": result}
         return None
 
-    def process(self, position, atr, current_price):
+    def process(self, position, atr, current_price, is_zone=False):
         if atr <= 0:
             return {"status": "SKIP", "action": "NONE", "reason": "ATR tidak tersedia."}
 
@@ -142,6 +144,30 @@ class ATRProtectionManager:
             return {"status": "CLOSED", "action": "EMERGENCY",
                     "reason": f"Loss {position.profit:.2f} >= ambang emergency {emergency_loss:.2f} USD.",
                     "ticket": position.ticket, "result": result}
+
+        # ======================================
+        # EXIT KHUSUS ZONE
+        # SL struktural (di luar tepi zona) dan TP mid-range
+        # sudah dipasang di server saat entry. Jangan pakai
+        # FAST_TP/SL+/recovery/stall scalp (bisa menutup lebih
+        # awal dari TP mid-range). Sisa aturan: emergency
+        # (di atas) + time-exit di bawah.
+        # ======================================
+        if is_zone:
+            try:
+                _zmin = float(self.zone_time_exit_min or 0)
+            except Exception:
+                _zmin = 0.0
+            age_min = (time.time() - float(position.time)) / 60.0
+            if _zmin > 0 and age_min >= _zmin:
+                _log_close("ZONE_TIME_EXIT", position.ticket, position.symbol, position.profit)
+                result = self.controller.close(position, caller="ZONE_TIME_EXIT")
+                return {"status": "CLOSED", "action": "ZONE_TIME_EXIT",
+                        "reason": f"Zone time exit ({age_min:.0f}/{_zmin:.0f} menit).",
+                        "ticket": position.ticket, "result": result}
+            return {"status": "HOLD", "action": "ZONE",
+                    "reason": f"Zone: tunggu TP mid / SL / time ({age_min:.0f}/{_zmin:.0f} menit).",
+                    "ticket": position.ticket}
 
         # ======================================
         # Partial close 50% at 1.0x ATR

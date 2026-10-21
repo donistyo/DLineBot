@@ -90,7 +90,7 @@ def analyze_from_dfs(df_m5, df_m15):
     """
     Keputusan zone dari dataframe M5/M15 yang sudah berindikator.
     Return dict: direction, trigger, reason, zone, rsi, atr, dist_atr,
-    bounce_atr, pos_pct, entry_mode="zone".
+    bounce_atr, pos_pct, close, range_lo/hi/mid, entry_mode="zone".
     """
     lookback = int(_cfg("zone_lookback", 40))
     band_atr = _cfg("zone_band_atr", 0.30)
@@ -140,9 +140,13 @@ def analyze_from_dfs(df_m5, df_m15):
             hh = float(df_m15["high"].tail(lookback).max())
             ll = float(df_m15["low"].tail(lookback).min())
             pos_pct = (close - ll) / max(hh - ll, 0.01)
+            base["range_hi"] = round(hh, 2)
+            base["range_lo"] = round(ll, 2)
+            base["range_mid"] = round((hh + ll) / 2.0, 2)
         except Exception:
             pos_pct = None
         base["pos_pct"] = round(pos_pct, 3) if pos_pct is not None else None
+        base["close"] = round(close, 5)
 
         body = abs(close - op)
         lower_wick = min(op, close) - low
