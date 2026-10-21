@@ -3255,6 +3255,7 @@ let lwSeries = null;
 let lwPriceLines = [];   // [{key, line}] entry/SL/TP
 let lwLiveLine = null;
 let lwMarkers = [];
+let lwBarRange = null;   // [firstBarTime, lastBarTime] utk filter marker di luar data
 const LW_TFS = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'];
 let chartSource = localStorage.getItem('chartSource') || 'mt5';
 let chartTF = LW_TFS.includes(localStorage.getItem('chartTF')) ? localStorage.getItem('chartTF') : 'M5';
@@ -3339,6 +3340,7 @@ function lwSetBars(bars) {
   if (!lwSeries || !bars) return;
   lwSeries.setData(bars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
   if (lwChart && bars.length) lwChart.timeScale().fitContent();
+  lwBarRange = bars.length ? [bars[0].time, bars[bars.length - 1].time] : null;
 }
 
 function lwUpdateBar(bar) {
@@ -3393,7 +3395,10 @@ function lwSetPositionLines(positions) {
 function lwSetMarkers(signals) {
   if (!lwSeries || !signals) return;
   try {
-    const markers = signals.slice(-20).filter(s => s.price && s.timestamp).map(s => ({
+    const markers = signals.slice(-20).filter(s => s.price && s.timestamp).filter(s => {
+      if (!lwBarRange) return true;
+      return s.timestamp >= lwBarRange[0] && s.timestamp <= lwBarRange[1] + 3600;
+    }).map(s => ({
       time: s.timestamp,
       position: s.signal === 'BUY' ? 'belowBar' : 'aboveBar',
       color: s.signal === 'BUY' ? '#22c55e' : '#ef4444',

@@ -20,7 +20,7 @@ MT5_TF = {
     "H4": mt5.TIMEFRAME_H4,
     "D1": mt5.TIMEFRAME_D1,
 }
-DEFAULT_BARS = 500
+DEFAULT_BARS = 2000
 VALID_TFS = tuple(TF_SECONDS.keys())
 
 
