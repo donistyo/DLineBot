@@ -35,6 +35,13 @@ class NewsFilter:
                 data = json.loads(resp.read().decode())
         except Exception as e:
             print(f"NewsFilter: Gagal fetch calendar - {e}")
+            # Pakai cache lama (kalender mingguan, masih valid s.d. 12 jam)
+            # daripada gagal-terbuka yang melewatkan news.
+            if self._cache and self._cache_time and \
+                    (now - self._cache_time) < timedelta(hours=12):
+                age = int((now - self._cache_time).total_seconds() // 60)
+                print(f"NewsFilter: pakai cache lama ({age} menit lalu)")
+                return self._cache
             return None
 
         self._cache = data

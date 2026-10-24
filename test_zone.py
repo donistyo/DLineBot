@@ -66,7 +66,8 @@ de = DecisionEngine(min_scalp_score=60)
 d_buy = de.decide(None, {"zone": z_buy}, None, strategy="zone")
 check("decision BUY", d_buy["action"] == "BUY", d_buy.get("reason"))
 check("entry_strategy zone", d_buy.get("entry_strategy") == "zone")
-check("entry_layers dual 2", d_buy.get("entry_layers") == 2)
+from app.trading.decision_engine import _min_entry_layers as _mel
+check("entry_layers sesuai config", d_buy.get("entry_layers") == _mel())
 check("zone_lo diteruskan", d_buy.get("zone_lo") is not None)
 check("range_mid diteruskan", d_buy.get("range_mid") == z_buy.get("range_mid"))
 

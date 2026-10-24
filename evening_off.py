@@ -6,7 +6,7 @@ from pathlib import Path
 import MetaTrader5 as mt5
 
 SYMBOL = "XAUUSDc"
-ENABLED_FILE = Path(r"C:\Users\ADSS\AI-XAU-BOT\runtime\auto_trade_enabled.json")
+ENABLED_FILE = Path(r"C:\Project\Bot\DLineBot\runtime\auto_trade_enabled.json")
 OFF_H = 18
 OFF_M = 30
 CLOSE_H = 19

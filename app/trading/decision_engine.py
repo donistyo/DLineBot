@@ -1,3 +1,12 @@
+def _min_entry_layers():
+    """Jumlah layer minimum per entry (config entry_min_layers, default 2)."""
+    try:
+        from app.config.settings import get_trade_config
+        return max(1, int(get_trade_config("entry_min_layers", 2) or 2))
+    except Exception:
+        return 2
+
+
 class DecisionEngine:
 
     def __init__(self, min_scalp_score=55):
@@ -104,8 +113,8 @@ class DecisionEngine:
             "action": direction,
             "reason": bbma.get("reason") or f"BBMA reentry {direction}",
             **base,
-            "entry_layers": 2,
-            "tier_reason": f"BBMA fixed dual (slope {slope}, dist {dist} ATR)",
+            "entry_layers": _min_entry_layers(),
+            "tier_reason": f"BBMA fixed ({slope}, dist {dist} ATR)",
             "checks": checks,
         }
 
@@ -250,8 +259,8 @@ class DecisionEngine:
             "action": direction,
             "reason": zone.get("reason") or f"Zone reentry {direction}",
             **base,
-            "entry_layers": 2,
-            "tier_reason": "Zone fixed dual 2",
+            "entry_layers": _min_entry_layers(),
+            "tier_reason": f"Zone fixed {_min_entry_layers()}",
             "checks": checks,
         }
 
@@ -625,7 +634,10 @@ class DecisionEngine:
         # =====================================
         # Rebound guard: tolak entry dekat tepi
         # range 20 candle M5.
-        # Momentum mode: skip (breakout continuation).
+        # Momentum mode: pengecekan ATR dilewati
+        # (breakout continuation), TAPI tetap tolak
+        # entry di ujung ekstrem range berdasarkan
+        # posisi harga (rebound_pos_min, default 15%).
         # =====================================
         if not _mom:
             try:
@@ -651,7 +663,39 @@ class DecisionEngine:
                         )
             except Exception:
                 pass
-        _ck("Rebound edge", True, "tidak di tepi range" if not _mom else "skip [momentum]")
+        else:
+            try:
+                from app.config.settings import get_trade_config
+                _reb_pos_min = float(
+                    get_trade_config("rebound_pos_min", 0.15) or 0.15
+                )
+                _r_close = float(scalp_result.get("close", 0) or 0)
+                _r_high = float(scalp_result.get("range_high", 0) or 0)
+                _r_low = float(scalp_result.get("range_low", 0) or 0)
+                if _r_close > 0 and _r_high > _r_low and _reb_pos_min > 0:
+                    _pos = (_r_close - _r_low) / (_r_high - _r_low)
+                    if direction == "SELL" and _pos < _reb_pos_min:
+                        return _reject(
+                            "Rebound edge",
+                            f"Sell di {_pos:.0%} range (< {_reb_pos_min:.0%}) - rawan rebound naik",
+                            f"pos {_pos:.0%} < {_reb_pos_min:.0%} [momentum]"
+                        )
+                    if direction == "BUY" and _pos > (1.0 - _reb_pos_min):
+                        return _reject(
+                            "Rebound edge",
+                            f"Buy di {_pos:.0%} range (> {1.0 - _reb_pos_min:.0%}) - rawan koreksi turun",
+                            f"pos {_pos:.0%} > {1.0 - _reb_pos_min:.0%} [momentum]"
+                        )
+            except Exception:
+                pass
+        try:
+            from app.config.settings import get_trade_config as _gtc_reb
+            _reb_min_log = float(_gtc_reb("rebound_pos_min", 0.15) or 0.15)
+        except Exception:
+            _reb_min_log = 0.15
+        _ck("Rebound edge", True,
+            "tidak di tepi range" if not _mom
+            else f"momentum: pos >= {_reb_min_log:.0%}")
 
         # =====================================
         # Price position filter (absolute):
@@ -795,7 +839,7 @@ class DecisionEngine:
         # layer_count < 5 = kill switch (semua
         # sinyal jadi FALLBACK 2 layer).
         # =====================================
-        _entry_layers = 2
+        _entry_layers = _min_entry_layers()
         _tier_reason = "default: layer_count < 5 atau gagal gate"
         try:
             from app.config.settings import get_trade_config
@@ -836,12 +880,12 @@ class DecisionEngine:
                     _fail.append(f"chase {float(_chase):.2f} > {_max_chase:.2f} ATR")
                 if not _fail:
                     _copies = int(get_trade_config("premium_copies", _layer_cfg) or _layer_cfg)
-                    _entry_layers = max(2, min(_layer_cfg, _copies))
+                    _entry_layers = max(_min_entry_layers(), min(_layer_cfg, _copies))
                     _tier_reason = f"score {score}, tests60 {int(_tests60)}, pos {int(_audit_pos * 100)}%"
                 else:
                     _tier_reason = "; ".join(_fail)
         except Exception:
-            _entry_layers = 2
+            _entry_layers = _min_entry_layers()
 
         _guard = momentum.get("trend_override")
         if _guard:
@@ -851,7 +895,7 @@ class DecisionEngine:
                 f"trend_override {_guard}"
             ) | {
                 "pos_pct": _audit_pos,
-                "entry_layers": 2,
+                "entry_layers": _min_entry_layers(),
                 "tier_reason": f"guard aktif: {_guard}"
             }
 
@@ -883,7 +927,7 @@ class DecisionEngine:
                     f"rng_pos {int(float(_rng_now) * 100)}% > {int(_rng_block * 100)}%"
                 ) | {
                     "pos_pct": _audit_pos,
-                    "entry_layers": 2,
+                    "entry_layers": _min_entry_layers(),
                     "tier_reason": f"rng_pos hard block {int(float(_rng_now) * 100)}%"
                 }
 

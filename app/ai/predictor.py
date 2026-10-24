@@ -6,9 +6,11 @@ class Predictor:
     Prediction Engine AI
     """
 
+    # Label dataset: 0 = SELL, 1 = HOLD, 2 = BUY (lihat labeler)
     SIGNAL_MAP = {
         0: "SELL",
-        1: "BUY",
+        1: "HOLD",
+        2: "BUY",
     }
 
     def __init__(self, model):
@@ -28,16 +30,19 @@ class Predictor:
                 "HOLD": float(proba[1]),
                 "BUY": float(proba[2]),
             }
+            signal = self.SIGNAL_MAP.get(prediction, "HOLD")
         else:
+            # Model 2-kelas: 0 = SELL, 1 = BUY (tanpa HOLD)
             prob = {
                 "SELL": float(proba[0]) if 0 < len(proba) else 0.0,
                 "HOLD": 0.0,
                 "BUY": float(proba[1]) if 1 < len(proba) else 0.0,
             }
+            signal = {0: "SELL", 1: "BUY"}.get(prediction, "HOLD")
 
         return {
             "time": last_data.index[-1],
-            "signal": self.SIGNAL_MAP.get(prediction, "HOLD"),
+            "signal": signal,
             "class": int(prediction),
             "confidence": float(proba.max()),
             "probability": prob,

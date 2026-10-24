@@ -80,6 +80,42 @@ def stop_engine():
     return False
 
 
+def patch_websockets_limits():
+    """Handshake WebSocket dibatasi websockets-lib 8 KiB per baris header.
+
+    Header besar (mis. Cookie raksasa dari browser) bikin server balas 431
+    yang bahkan tidak sampai ke klien -> chart WS RECONNECT terus.
+    Longgarkan limit + catat header besar untuk diagnosis.
+    """
+    try:
+        import datetime
+        from websockets import http11
+
+        http11.MAX_LINE_LENGTH = 65536
+        http11.MAX_NUM_HEADERS = 512
+        _orig_parse = http11.Request.parse.__func__
+
+        def _parse(cls, read_line):
+            request = yield from _orig_parse(cls, read_line)
+            try:
+                big = [(k, len(v)) for k, v in request.headers.raw_items()
+                       if len(v) >= 8000]
+                if big:
+                    detail = ", ".join(f"{k}={n}B" for k, n in big)
+                    with open("logs/ws_big_headers.log", "a", encoding="utf-8") as f:
+                        f.write(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S} "
+                                f"handshake header besar: {detail} "
+                                f"(total_headers={len(request.headers)})\n")
+            except Exception:
+                pass
+            return request
+
+        http11.Request.parse = classmethod(_parse)
+        print("[WS-PATCH] batas header handshake WS dinaikkan ke 64 KiB")
+    except Exception as e:
+        print(f"[WS-PATCH] gagal patch websockets: {e}")
+
+
 if __name__ == "__main__":
     port = 8000
     local_ip = get_local_ip()
@@ -106,9 +142,12 @@ if __name__ == "__main__":
 
     print("=" * 60)
 
+    patch_websockets_limits()
+
     uvicorn.run(
         "app.web_dashboard.main:app",
         host="0.0.0.0",
         port=port,
-        reload=False
+        reload=False,
+        h11_max_incomplete_event_size=1048576,
     )

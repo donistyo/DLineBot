@@ -102,8 +102,8 @@ def _pos(age_min, profit=0.0):
 
 
 fresh = mgr.process(_pos(5, profit=1.5), 5.0, 3302.0, is_zone=True)
-check("zone profit > fast_tp tetap HOLD (bukan FAST_TP)",
-      fresh["status"] == "HOLD" and fresh["action"] == "ZONE", fresh)
+check("zone ikut FAST_TP (zone_fast_tp=1)",
+      fresh["status"] == "CLOSED" and fresh["action"] == "FAST_TP", fresh)
 old = mgr.process(_pos(91, profit=0.3), 5.0, 3302.0, is_zone=True)
 check("zone umur >= 90 menit -> ZONE_TIME_EXIT",
       old["status"] == "CLOSED" and old["action"] == "ZONE_TIME_EXIT", old)

@@ -13,10 +13,10 @@ __pycache__/
 # Generated Files
 logs/
 datasets/
-models/
+/models/
 history/
 reports/
-data/
+/data/
 runtime/
 
 # IDE

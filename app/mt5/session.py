@@ -89,7 +89,7 @@ class MT5Session:
             return False
 
         # Strategy 3: plain initialize (rely on terminal being pre-logged-in)
-        if mt5.initialize(path=MT5_PATH):
+        if mt5.initialize(path=MT5_PATH) or mt5.initialize():
             cls._connected = True
             acc = mt5.account_info()
             if acc:

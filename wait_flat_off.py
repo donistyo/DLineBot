@@ -5,7 +5,7 @@ from pathlib import Path
 
 import MetaTrader5 as mt5
 
-RUNTIME = Path(r"C:\Users\ADSS\AI-XAU-BOT\runtime")
+RUNTIME = Path(r"C:\Project\Bot\DLineBot\runtime")
 SYMBOL = "XAUUSDc"
 ENABLED_FILE = RUNTIME / "auto_trade_enabled.json"
 FLAG_FILE = RUNTIME / "wait_flat_off.json"

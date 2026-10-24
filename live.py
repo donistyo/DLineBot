@@ -13,9 +13,13 @@ _dashboard_proc = None
 def start_dashboard():
     global _dashboard_proc
     script = str(Path(__file__).parent / "dashboard.py")
+    log_path = Path(__file__).parent / "logs" / "dashboard.log"
+    log_path.parent.mkdir(exist_ok=True)
+    # Tulis ke file (bukan PIPE) - PIPE yang tak dibaca bikin proses macet
+    log_file = open(log_path, "a", encoding="utf-8", errors="replace")
     _dashboard_proc = subprocess.Popen(
         [sys.executable, script],
-        stdout=subprocess.PIPE,
+        stdout=log_file,
         stderr=subprocess.STDOUT,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     )

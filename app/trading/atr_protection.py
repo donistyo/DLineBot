@@ -148,12 +148,26 @@ class ATRProtectionManager:
         # ======================================
         # EXIT KHUSUS ZONE
         # SL struktural (di luar tepi zona) dan TP mid-range
-        # sudah dipasang di server saat entry. Jangan pakai
-        # FAST_TP/SL+/recovery/stall scalp (bisa menutup lebih
-        # awal dari TP mid-range). Sisa aturan: emergency
+        # sudah dipasang di server saat entry. FAST_TP tetap
+        # berlaku bila zone_fast_tp > 0 (default 1) supaya
+        # profit yang sudah menyentuh target USD tidak
+        # dikembalikan ke pasar. Sisa aturan: emergency
         # (di atas) + time-exit di bawah.
         # ======================================
         if is_zone:
+            try:
+                from app.config.settings import get_trade_config
+                _z_fast_tp = float(get_trade_config("zone_fast_tp", 1) or 0)
+            except Exception:
+                _z_fast_tp = 1.0
+            if (_z_fast_tp > 0 and self.fast_tp_usd > 0
+                    and position.profit >= self.fast_tp_usd):
+                _log_close("FAST_TP", position.ticket, position.symbol, position.profit)
+                result = self.controller.close(position, caller="FAST_TP_ZONE")
+                return {"status": "CLOSED", "action": "FAST_TP",
+                        "reason": f"Zone profit {position.profit:.2f} >= target "
+                                  f"{self.fast_tp_usd:.2f} USD.",
+                        "ticket": position.ticket, "result": result}
             try:
                 _zmin = float(self.zone_time_exit_min or 0)
             except Exception:

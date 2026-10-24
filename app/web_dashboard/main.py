@@ -323,7 +323,9 @@ async def ws_chart(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception:
-        pass
+        import traceback
+        print(f"[CHART-WS] ws_chart error (client={websocket.client}):")
+        traceback.print_exc()
     finally:
         _chart_ws.remove(websocket)
 
@@ -3263,6 +3265,7 @@ let lwSymbol = null;
 let chartWS = null;
 let wsRetryDelay = 1000;
 let wsReconnectTimer = null;
+let wsLastCloseCode = '';
 let wsLastTickTs = 0;
 
 function setChartSource(src) {
@@ -3459,9 +3462,10 @@ function connectChartWS(symbol, tf) {
       }
     } catch(e) {}
   };
-  chartWS.onclose = () => {
+  chartWS.onclose = (ev) => {
     chartWS = null;
-    updateWSChip('off', 'OFF');
+    wsLastCloseCode = (ev && ev.code) ? String(ev.code) : '';
+    updateWSChip('off', wsLastCloseCode ? 'OFF ' + wsLastCloseCode : 'OFF');
     scheduleWSReconnect(lwSymbol, tf);
   };
   chartWS.onerror = () => {
@@ -3471,7 +3475,7 @@ function connectChartWS(symbol, tf) {
 
 function scheduleWSReconnect(symbol, tf) {
   if (wsReconnectTimer) return;
-  updateWSChip('retry', 'RECONNECT ' + Math.round(wsRetryDelay / 1000) + 's');
+  updateWSChip('retry', 'RECONNECT ' + (wsLastCloseCode ? wsLastCloseCode + ' ' : '') + Math.round(wsRetryDelay / 1000) + 's');
   wsReconnectTimer = setTimeout(() => {
     wsReconnectTimer = null;
     if (chartSource === 'mt5') connectChartWS(symbol || lwSymbol, tf || chartTF);

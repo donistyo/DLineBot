@@ -1,17 +1,17 @@
 {
   "max_trade": 20,
-  "equity_floor": 75,
+  "equity_floor": 65,
   "max_positions": 4,
   "lot_size": 0.01,
-  "entry_copies_mode": "dual",
+  "entry_copies_mode": "single",
   "max_lot": 0.02,
-  "fast_tp_usd": 1.0,
+  "fast_tp_usd": 2.5,
   "reentry_cooldown_min": 10,
   "tp_atr_mult": 0.75,
   "fallback_tp_usd": 3.0,
   "sl_plus_usd": 0.5,
   "sl_plus_buffer": 0.1,
-  "be_lock_usd": 0.75,
+  "be_lock_usd": 1.5,
   "stall_start_usd": 1.5,
   "stall_seconds": 150,
   "loser_seconds": 1200,
@@ -31,12 +31,14 @@
   "sl_break_minutes": 60,
   "session_windows": [
     [
-      23,
-      16
+      22,
+      50,
+      15,
+      59
     ]
   ],
   "layer_count": 10,
-  "premium_copies": 4,
+  "premium_copies": 1,
   "premium_min_score": 65,
   "premium_max_tests": 10,
   "premium_pos_min": 0.25,
@@ -64,6 +66,7 @@
   "zone_rsi_hard": 80,
   "zone_pos_max": 0.8,
   "zone_pos_min": 0.2,
+  "zone_block_m15_adx": 30,
   "min_scalp_score": 60,
   "sideways_penalty": 10,
   "momentum_entry": 1,
@@ -73,6 +76,7 @@
   "momentum_exhaustion_atr": 4.5,
   "momentum_reentry_atr": 3.0,
   "momentum_pos_max": 0.92,
+  "rebound_pos_min": 0.15,
   "momentum_rng_block": 0.95,
   "momentum_atr_entry_max": 8.0,
   "bbma_reentry_atr": 2.5,
@@ -95,10 +99,12 @@
   "gate_early": 1.5,
   "early_min_m5_adx": 25,
   "early_exhaustion_atr": 4.5,
-  "early_sideways_entry": 0,
+  "early_sideways_entry": 1,
   "min_early_score": 70,
   "rsi_max_normal": 75,
   "exhaustion_atr_normal": 3.0,
   "min_free_margin": 5.0,
-  "entry_eval_per_m5": 1
+  "entry_eval_per_m5": 1,
+  "entry_min_layers": 1,
+  "zone_fast_tp": 1
 }

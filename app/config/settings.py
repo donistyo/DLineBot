@@ -21,6 +21,27 @@ MT5_PASSWORD = os.getenv("MT5_PASSWORD")
 MT5_SERVER = os.getenv("MT5_SERVER")
 MT5_PATH = os.getenv("MT5_PATH", r"D:\Project\bot\MetaTrader 5 EXNESS\terminal64.exe")
 
+
+def _resolve_mt5_path(path):
+    """Pakai path .env bila ada; kalau tidak, cari terminal MT5 yang terpasang."""
+    from pathlib import Path
+
+    candidates = [
+        path,
+        r"C:\Program Files\MetaTrader 5 EXNESS\terminal64.exe",
+        r"C:\Program Files\MetaTrader 5\terminal64.exe",
+        r"C:\Program Files (x86)\MetaTrader 5\terminal64.exe",
+    ]
+
+    for c in candidates:
+        if c and Path(c).exists():
+            return c
+
+    return path
+
+
+MT5_PATH = _resolve_mt5_path(MT5_PATH)
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 

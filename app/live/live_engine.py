@@ -1048,6 +1048,44 @@ class LiveEngine:
                     strategy=_eff_strategy,
                 )
 
+                # Fallback SCALP -> ZONE (mode hybrid): bila scalp
+                # menolak pada siklus ini, coba setup zona. Sinyal
+                # hanya dipakai jika zone_strategy memberi trigger
+                # valid (sentuh zona + RSI + candle rejection).
+                if (decision.get("action") == "NO_TRADE"
+                        and _eff_strategy == "scalp"
+                        and self._entry_strategy() == "hybrid"):
+                    _scalp_reason = decision.get("reason", "")
+                    try:
+                        from app.trading import zone_strategy
+                        _zone_res = zone_strategy.analyze(self.symbol)
+                        if isinstance(_zone_res, dict):
+                            scalp_result = dict(scalp_result or {})
+                            scalp_result["zone"] = _zone_res
+                            if (_zone_res.get("trigger")
+                                    and _zone_res.get("direction") in ("BUY", "SELL")):
+                                _z_dec = self.decision_engine.decide(
+                                    prediction, scalp_result, regime,
+                                    higher_trend, higher_adx, strategy="zone",
+                                )
+                                if _z_dec.get("action") in ("BUY", "SELL"):
+                                    decision = _z_dec
+                                    _eff_strategy = "zone"
+                                    print()
+                                    print("[HYBRID] SCALP menolak "
+                                          f"({_scalp_reason})")
+                                    print(f"[HYBRID] fallback ZONE "
+                                          f"{_z_dec['action']} - "
+                                          f"{_zone_res.get('reason')}")
+                            try:
+                                with open("runtime/scalping.json", "w") as _f:
+                                    json.dump(scalp_result, _f,
+                                              default=str, indent=2)
+                            except Exception:
+                                pass
+                    except Exception as _zf_exc:
+                        print(f"[HYBRID] fallback ZONE gagal: {_zf_exc}")
+
                 DecisionView.show(
                     decision
                 )
@@ -1420,6 +1458,12 @@ class LiveEngine:
             _floor_ok, _equity_now, _floor_val = self._equity_floor_state()
 
             open_tickets = {p.ticket for p in positions} if positions else set()
+            try:
+                self.session_manager.sync_today(
+                    self._today_entry_tickets(), open_tickets
+                )
+            except Exception:
+                pass
             session_result = self.session_manager.allow(open_tickets)
 
             can_trade = (
@@ -1841,16 +1885,20 @@ class LiveEngine:
             print(f"Saved : {log_file}")
 
             ticket = None
+            _tickets = []
             if result.get("results"):
                 for _r in result["results"]:
-                    if _r.get("success") and hasattr(_r["result"], "order"):
-                        ticket = _r["result"].order
-                        break
+                    _res = _r.get("result") if isinstance(_r, dict) else None
+                    if _r.get("success") and isinstance(_res, dict) and _res.get("order"):
+                        _tickets.append(int(_res["order"]))
             elif result.get("result") and hasattr(result["result"], "order"):
-                ticket = result["result"].order
+                _tickets.append(int(result["result"].order))
+            if _tickets:
+                ticket = _tickets[0]
 
             if ticket:
-                self.session_manager.register_entry(ticket)
+                for _t in _tickets:
+                    self.session_manager.register_entry(_t)
 
             trade_data = {
                 "time": last["time"],
@@ -2155,6 +2203,20 @@ class LiveEngine:
             pass
         return None
 
+    def _today_entry_tickets(self):
+        try:
+            now = datetime.now()
+            frm = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            deals = mt5.history_deals_get(frm, now) or []
+            return sorted({
+                int(d.position_id) for d in deals
+                if d.entry == mt5.DEAL_ENTRY_IN
+                and d.symbol == self.symbol
+                and str(d.comment or "").startswith("DLineBot")
+            })
+        except Exception:
+            return []
+
     def _ticket_profit(self, tickets):
         try:
             total = 0.0
@@ -2237,27 +2299,51 @@ class LiveEngine:
         except Exception:
             return "scalp"
 
-    def _effective_strategy(self, regime=None):
+    def _m5_adx_cached(self, ttl=15.0):
+        """ADX M5 untuk routing hybrid (cache pendek, hindari load tiap detik)."""
+        now = time.time()
+        cache = getattr(self, "_m5_adx_cache", None)
+        if cache and (now - cache[0]) < ttl:
+            return cache[1]
+        try:
+            res = self.smart_scalping.get_ema_adx(mt5.TIMEFRAME_M5)
+            if res:
+                adx = float(res[3])
+                self._m5_adx_cache = (now, adx)
+                return adx
+        except Exception:
+            pass
+        return None
+
+    def _effective_strategy(self, regime=None, m5_adx=None):
         """Strategi entry efektif cycle ini.
 
         Mode 'scalp'/'bbma'/'zone' -> langsung.
-        Mode 'hybrid' -> ZONE saat ADX < zone_regime_adx_max (20),
-        SCALP saat ADX > scalp_resume_adx (25); di antara kedua
+        Mode 'hybrid' -> ZONE saat ADX M5 < zone_regime_adx_max (20),
+        SCALP saat ADX M5 > scalp_resume_adx (25); di antara kedua
         ambang pertahankan state terakhir (hysteresis, anti flip-flop).
+        ADX M5 dipakai karena M1 terlalu noise (ADX M1 bisa 50 saat
+        M5/M15 ranging) - fallback ke ADX regime bila M5 gagal.
         """
         mode = self._entry_strategy()
         if mode != "hybrid":
             return mode
+        if m5_adx is None:
+            m5_adx = self._m5_adx_cached()
         try:
             _zone_max = float(get_trade_config("zone_regime_adx_max", 20) or 20)
             _scalp_min = float(get_trade_config("scalp_resume_adx", 25) or 25)
-            _adx = float((regime or {}).get("adx", 0) or 0)
+            _adx = float(m5_adx if m5_adx is not None
+                         else (regime or {}).get("adx", 0) or 0)
         except Exception:
             _zone_max, _scalp_min, _adx = 20.0, 25.0, 0.0
         _state = hybrid_strategy_state(
             "hybrid", _adx, getattr(self, "_hybrid_strategy", None),
             zone_max=_zone_max, scalp_resume=_scalp_min,
         )
+        if _state != getattr(self, "_hybrid_strategy", None):
+            print(f"[HYBRID] ADX M5 {_adx:.1f} -> strategi {_state.upper()} "
+                  f"(zone<{_zone_max:.0f}, scalp>{_scalp_min:.0f})")
         self._hybrid_strategy = _state
         return _state
 

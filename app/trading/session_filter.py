@@ -5,13 +5,14 @@ class SessionFilter:
 
     def __init__(self, windows=None, start_hour=7, end_hour=21):
         """
-        windows: list of (start_hour, end_hour) INCLUSIVE, dalam UTC.
-        Mendukung interval yang melewati tengah malam (mis. (23, 12) = 23:00-00:00 lalu 00:00-12:00 UTC).
+        windows: list of window, masing-masing salah satu bentuk:
+          - (start_hour, end_hour)          -> resolusi jam (INKLUSIF), UTC
+          - (start_h, start_m, end_h, end_m) -> resolusi menit (INKLUSIF), UTC
+        Mendukung interval yang melewati tengah malam
+        (mis. (23, 12) = 23:00-00:00 lalu 00:00-12:00 UTC).
 
-        Default (Asia + awal London) sesuai rekomendasi:
-          - Asia  : 23:00 UTC - 07:00 UTC  (06:00-14:00 WIB)
-          - London: 07:00 UTC - 12:30 UTC  (14:00-19:30 WIB)
-        => aktif rentang 23:00 - 12:30 UTC (NY aktif 12:30-23:00 UTC dimatikan).
+        Catatan: waktu yang dipakai adalah UTC.
+        WIB = UTC+7, jadi 05:50 WIB = 22:50 UTC (hari sebelumnya).
         """
         if windows is None:
             windows = [(23, 12)]
@@ -19,20 +20,34 @@ class SessionFilter:
         self.start_hour = start_hour
         self.end_hour = end_hour
 
-    def _in_window(self, hour, start, end):
+    def _parse_window(self, w):
+        """Return (start_minutes, end_minutes) dari tuple window."""
+        if len(w) >= 4:
+            start = int(w[0]) * 60 + int(w[1])
+            end = int(w[2]) * 60 + int(w[3])
+        else:
+            start = int(w[0]) * 60
+            end = int(w[1]) * 60 + 59  # presisi jam: sampai menit terakhir
+        return start, end
+
+    def _in_window(self, minutes, start, end):
         if start <= end:
-            return start <= hour <= end
-        # interval melewati tengah malam, mis (23,12)
-        return hour >= start or hour <= end
+            return start <= minutes <= end
+        # interval melewati tengah malam
+        return minutes >= start or minutes <= end
 
     def allow(self):
-        hour = datetime.utcnow().hour
+        now = datetime.utcnow()
+        minutes = now.hour * 60 + now.minute
 
-        for start, end in self.windows:
-            if self._in_window(hour, start, end):
+        for w in self.windows:
+            start, end = self._parse_window(w)
+            if self._in_window(minutes, start, end):
+                s_h, s_m = divmod(start, 60)
+                e_h, e_m = divmod(end, 60)
                 return {
                     "allowed": True,
-                    "reason": f"Trading session aktif ({start:02d}:00-{end:02d}:00 UTC)."
+                    "reason": f"Trading session aktif ({s_h:02d}:{s_m:02d}-{e_h:02d}:{e_m:02d} UTC)."
                 }
 
         return {

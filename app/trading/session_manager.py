@@ -8,7 +8,9 @@ class SessionManager:
     def __init__(self, max_sessions=5, max_per_session=10):
         self.max_sessions = max_sessions
         self.max_per_session = max_per_session
-        self._state_file = Path("runtime/session_state.json")
+        self._state_file = (
+            Path(__file__).resolve().parents[2] / "runtime" / "session_state.json"
+        )
         self._state = self._load()
 
     # =====================================
@@ -99,6 +101,43 @@ class SessionManager:
             s["session_entry_tickets"].append(ticket)
             s["closed_today"] += 1
             self._save()
+
+    # =====================================
+    # Sinkron dari histori (tahan restart)
+    # =====================================
+
+    def sync_today(self, entry_tickets, open_tickets):
+        """Bangun ulang counter sesi dari tiket entry hari ini.
+
+        Membuat batas sesi tetap benar setelah dashboard/engine
+        restart: jumlah entry dihitung dari histori deal broker,
+        bukan dari memori proses.
+        """
+        today = str(date.today())
+        try:
+            tickets = sorted({int(t) for t in (entry_tickets or [])})
+        except Exception:
+            tickets = []
+        per = max(1, int(self.max_per_session))
+        total = len(tickets)
+        session = min(int(self.max_sessions), total // per + 1)
+        used = total % per
+        try:
+            open_set = {int(t) for t in (open_tickets or [])}
+        except Exception:
+            open_set = set()
+        batch = tickets[(session - 1) * per:] if used else []
+        state = {
+            "date": today,
+            "current_session": session,
+            "entries_this_session": used,
+            "session_entry_tickets": [t for t in batch if t in open_set],
+            "closed_today": total,
+        }
+        if state != self._state:
+            self._state = state
+            self._save()
+        return state
 
     # =====================================
     # Reset for new day

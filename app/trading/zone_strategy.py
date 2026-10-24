@@ -227,6 +227,34 @@ def analyze_from_dfs(df_m5, df_m15):
             )
             return base
 
+        # Filter tren M15: entry zona tidak boleh melawan tren M15
+        # yang kuat (mis. BUY support saat M15 downtrend ADX >= 30).
+        try:
+            from app.trading.regime_logic import classify_regime
+            _block_adx = _cfg("zone_block_m15_adx", 30)
+            if _block_adx > 0 and df_m15 is not None and len(df_m15):
+                _l15 = df_m15.iloc[-1]
+                _reg15 = classify_regime(
+                    float(_l15["close"]), float(_l15["EMA20"]),
+                    float(_l15["EMA50"]), float(_l15.get("ADX", 0) or 0),
+                )
+                _map = {"UP": "BUY", "DOWN": "SELL"}
+                _want = best[1]["direction"]
+                if (_reg15.adx >= _block_adx
+                        and _reg15.trend in _map
+                        and _map[_reg15.trend] != _want):
+                    base["blocked_by"] = "M15_TREND"
+                    base["m15_trend"] = _reg15.trend
+                    base["m15_adx"] = round(_reg15.adx, 1)
+                    base["reason"] = (
+                        f"Zona {_want} ditolak: M15 tren {_reg15.trend} kuat "
+                        f"(ADX {_reg15.adx:.1f} >= {_block_adx:.0f}) - "
+                        f"hindari melawan tren"
+                    )
+                    return base
+        except Exception:
+            pass
+
         base.update(best[1])
         return base
 
