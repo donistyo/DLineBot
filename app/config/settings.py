@@ -129,25 +129,40 @@ LABEL_ATR_MULTIPLIER = float(os.getenv("LABEL_ATR_MULTIPLIER", "0.3"))
 # =====================================
 
 _TRADE_CONFIG = {}
+_TRADE_CONFIG_MTIME = 0.0
+
+
+def _trade_config_path():
+    from pathlib import Path
+    p = Path("runtime/trade_config.json")
+    if p.exists():
+        return p
+    return Path(__file__).resolve().parents[2] / "runtime" / "trade_config.json"
 
 
 def load_trade_config():
     """Muat runtime/trade_config.json (lot_size, max_trade, max_positions)."""
-    global _TRADE_CONFIG
+    global _TRADE_CONFIG, _TRADE_CONFIG_MTIME
     _TRADE_CONFIG = {}
     try:
-        from pathlib import Path
-        path = Path("runtime/trade_config.json")
+        path = _trade_config_path()
         if path.exists():
             import json
             with open(path, "r", encoding="utf-8") as f:
                 _TRADE_CONFIG = json.load(f)
+            _TRADE_CONFIG_MTIME = path.stat().st_mtime
     except Exception:
         _TRADE_CONFIG = {}
     return _TRADE_CONFIG
 
 
 def get_trade_config(key, default=None):
-    if not _TRADE_CONFIG:
+    """Baca config; reload otomatis bila file berubah (tanpa restart)."""
+    global _TRADE_CONFIG, _TRADE_CONFIG_MTIME
+    try:
+        mtime = _trade_config_path().stat().st_mtime
+    except Exception:
+        mtime = _TRADE_CONFIG_MTIME
+    if not _TRADE_CONFIG or mtime != _TRADE_CONFIG_MTIME:
         load_trade_config()
     return _TRADE_CONFIG.get(key, default)

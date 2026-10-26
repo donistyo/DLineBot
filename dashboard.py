@@ -2,6 +2,7 @@ import uvicorn
 import socket
 import atexit
 import threading
+import time
 from pathlib import Path
 from dotenv import load_dotenv, set_key
 
@@ -11,6 +12,85 @@ ENV_PATH = Path(".env")
 
 _runner = None
 _runner_thread = None
+
+
+class _QuietStdout:
+    """Filter stdout engine: buang baris kosong/separator berulang.
+
+    View console dicetak tiap siklus (~26 baris/detik), mayoritas
+    kosong dan '====='. Tanpa filter log membengkak >100 MB/hari.
+    Baris unik (harga, sinyal, error) tetap ditulis apa adanya;
+    baris identik dalam window detik yang sama hanya ditulis sekali.
+    """
+
+    def __init__(self, stream, window=60.0):
+        self._stream = stream
+        self._window = window
+        self._last = {}
+        self._last_blank = False
+        self._lock = threading.Lock()
+        self._buf = ""
+
+    def _emit(self, line):
+        s = line.strip()
+        if not s:
+            if self._last_blank:
+                return False
+            self._last_blank = True
+            return True
+        now = time.monotonic()
+        key = "SEP" if (len(s) >= 3 and set(s) == {"="}) else s
+        prev = self._last.get(key)
+        self._last[key] = now
+        if len(self._last) > 5000:
+            cutoff = now - self._window
+            self._last = {k: v for k, v in self._last.items() if v >= cutoff}
+            if len(self._last) > 5000:
+                self._last.clear()
+        if prev is not None and (now - prev) < self._window:
+            return False
+        self._last_blank = False
+        return True
+
+    def write(self, data):
+        if not isinstance(data, str):
+            return self._stream.write(data)
+        with self._lock:
+            self._buf += data
+            if "\n" not in self._buf:
+                return len(data)
+            out = []
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                if self._emit(line):
+                    out.append(line + "\n")
+            if out:
+                try:
+                    self._stream.write("".join(out))
+                    self._stream.flush()
+                except Exception:
+                    pass
+            return len(data)
+
+    def flush(self):
+        try:
+            self._stream.flush()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def install_quiet_stdout():
+    import sys
+    if isinstance(sys.stdout, _QuietStdout):
+        return
+    try:
+        sys.stdout = _QuietStdout(sys.stdout)
+        print("[LOG] Filter log aktif (baris berulang/blank dibatasi)")
+    except Exception:
+        pass
 
 
 def get_local_ip():
@@ -119,6 +199,8 @@ def patch_websockets_limits():
 if __name__ == "__main__":
     port = 8000
     local_ip = get_local_ip()
+
+    install_quiet_stdout()
 
     local_url = f"http://{local_ip}:{port}"
 

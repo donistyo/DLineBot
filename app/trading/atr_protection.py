@@ -69,6 +69,7 @@ class ATRProtectionManager:
         self.controller = PositionController()
         self._partial_done = set()
         self._peak_price = {}
+        self._peak_usd = {}
         self._stall_start = {}
         self._ever_profit = set()
         self._real_red = set()
@@ -93,6 +94,7 @@ class ATRProtectionManager:
     def cleanup(self, active_tickets):
         self._partial_done = {t for t in self._partial_done if t in active_tickets}
         self._peak_price = {t: p for t, p in self._peak_price.items() if t in active_tickets}
+        self._peak_usd = {t: p for t, p in self._peak_usd.items() if t in active_tickets}
         self._stall_start = {t: s for t, s in self._stall_start.items() if t in active_tickets}
         self._ever_profit = {t for t in self._ever_profit if t in active_tickets}
         self._real_red = {t for t in self._real_red if t in active_tickets}
@@ -158,8 +160,10 @@ class ATRProtectionManager:
             try:
                 from app.config.settings import get_trade_config
                 _z_fast_tp = float(get_trade_config("zone_fast_tp", 1) or 0)
+                _z_trail_start = float(get_trade_config("zone_trail_start_usd", 1.5) or 0)
+                _z_trail_gap = float(get_trade_config("zone_trail_gap_usd", 1.0) or 0)
             except Exception:
-                _z_fast_tp = 1.0
+                _z_fast_tp, _z_trail_start, _z_trail_gap = 1.0, 1.5, 1.0
             if (_z_fast_tp > 0 and self.fast_tp_usd > 0
                     and position.profit >= self.fast_tp_usd):
                 _log_close("FAST_TP", position.ticket, position.symbol, position.profit)
@@ -168,6 +172,27 @@ class ATRProtectionManager:
                         "reason": f"Zone profit {position.profit:.2f} >= target "
                                   f"{self.fast_tp_usd:.2f} USD.",
                         "ticket": position.ticket, "result": result}
+            # Trailing berbasis peak profit (USD): setelah profit
+            # mencapai zone_trail_start_usd, SL dikunci pada
+            # peak - zone_trail_gap_usd supaya lonjakan balik
+            # (mis. +3 -> -5) tidak mengubah profit jadi loss.
+            if _z_trail_start > 0 and _z_trail_gap > 0:
+                _peak = max(self._peak_usd.get(position.ticket, 0.0), position.profit)
+                self._peak_usd[position.ticket] = _peak
+                _lock = _peak - _z_trail_gap
+                if _peak >= _z_trail_start and _lock > 0:
+                    if is_buy:
+                        _new_sl = round(position.price_open + _lock, 5)
+                        _better = position.sl == 0 or _new_sl > position.sl + 1e-9
+                    else:
+                        _new_sl = round(position.price_open - _lock, 5)
+                        _better = position.sl == 0 or _new_sl < position.sl - 1e-9
+                    if _better:
+                        _res = self.controller.modify_sl(position, _new_sl)
+                        return {"status": "UPDATED", "action": "ZONE_TRAIL",
+                                "reason": f"Zone trailing: peak +{_peak:.2f} -> "
+                                          f"kunci +{_lock:.2f} USD ({_new_sl:.2f}).",
+                                "new_stop_loss": _new_sl, "result": _res}
             try:
                 _zmin = float(self.zone_time_exit_min or 0)
             except Exception:

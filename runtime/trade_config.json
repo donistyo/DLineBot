@@ -66,7 +66,7 @@
   "zone_rsi_hard": 80,
   "zone_pos_max": 0.8,
   "zone_pos_min": 0.2,
-  "zone_block_m15_adx": 30,
+  "zone_block_m15_adx": 25,
   "min_scalp_score": 60,
   "sideways_penalty": 10,
   "momentum_entry": 1,
@@ -106,5 +106,8 @@
   "min_free_margin": 5.0,
   "entry_eval_per_m5": 1,
   "entry_min_layers": 1,
-  "zone_fast_tp": 1
+  "zone_fast_tp": 1,
+  "zone_trail_start_usd": 1.5,
+  "zone_trail_gap_usd": 1.0,
+  "hard_sl_usd": 4.5
 }

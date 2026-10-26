@@ -70,8 +70,15 @@ from app.trading.atr_protection import ATRProtectionManager
 
 
 class _Ctl:
+    def __init__(self):
+        self.last_sl = None
+
     def close(self, position, caller=None):
         return {"success": True, "caller": caller}
+
+    def modify_sl(self, position, stop_loss):
+        self.last_sl = stop_loss
+        return {"success": True, "stop_loss": stop_loss}
 
 
 mgr = object.__new__(ATRProtectionManager)
@@ -90,12 +97,13 @@ mgr.fast_tp_usd = 1.0
 mgr.tp_atr_mult = 0.0
 mgr.be_lock_usd = 0.0
 mgr.sl_plus_usd = 0.0
+mgr._peak_usd = {}
 
 
-def _pos(age_min, profit=0.0):
+def _pos(age_min, profit=0.0, sl=3295.0):
     return SimpleNamespace(
         ticket=999, symbol="XAUUSDc", type=0, volume=0.01,
-        price_open=3302.0, sl=3295.0, tp=3355.0,
+        price_open=3302.0, sl=sl, tp=3355.0,
         profit=profit, time=time.time() - age_min * 60.0,
         comment="DLineBot",
     )
@@ -110,6 +118,20 @@ check("zone umur >= 90 menit -> ZONE_TIME_EXIT",
 nonzone = mgr.process(_pos(5, profit=1.5), 5.0, 3302.0, is_zone=False)
 check("non-zone tetap pakai FAST_TP",
       nonzone["status"] == "CLOSED" and nonzone["action"] == "FAST_TP", nonzone)
+
+mgr.fast_tp_usd = 0.0
+mgr._peak_usd = {}
+ctl = _Ctl()
+mgr.controller = ctl
+tr1 = mgr.process(_pos(5, profit=2.0), 5.0, 3304.0, is_zone=True)
+check("zone peak +2.0 -> ZONE_TRAIL kunci +1.0",
+      tr1["action"] == "ZONE_TRAIL" and abs(tr1.get("new_stop_loss", 0) - 3303.0) < 0.01, tr1)
+tr2 = mgr.process(_pos(5, profit=3.2), 5.0, 3305.2, is_zone=True)
+check("zone peak +3.2 -> SL naik kunci +2.2",
+      tr2["action"] == "ZONE_TRAIL" and abs(tr2.get("new_stop_loss", 0) - 3304.2) < 0.01, tr2)
+tr3 = mgr.process(_pos(5, profit=2.4, sl=3304.2), 5.0, 3304.4, is_zone=True)
+check("zone SL sudah optimal -> HOLD",
+      tr3["status"] == "HOLD", tr3)
 
 print("\n========================================")
 print(f"PASS: {passed}   FAIL: {failed}")

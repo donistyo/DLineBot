@@ -1632,6 +1632,26 @@ class LiveEngine:
                     if _layers_sl <= 2 and _sl_plus > 0:
                         risk["stop_loss"] = 0.0
 
+                # Hard SL server: batasi kerugian maksimum di broker
+                # (hard_sl_usd). Tanpa ini, lonjakan cepat bisa
+                # melewati ambang emergency sebelum loop 10 detik
+                # sempat menutup posisi (mis. -5.6 dari batas 4.5).
+                try:
+                    _hard = float(_cfg.get("hard_sl_usd", 0) or 0)
+                    _act = decision.get("action")
+                    _ep = float(risk.get("entry_price") or 0)
+                    if _hard > 0 and _ep > 0 and _act in ("BUY", "SELL"):
+                        if _act == "BUY":
+                            _cap = round(_ep - _hard, 5)
+                            if not risk.get("stop_loss") or risk["stop_loss"] < _cap:
+                                risk["stop_loss"] = _cap
+                        else:
+                            _cap = round(_ep + _hard, 5)
+                            if not risk.get("stop_loss") or risk["stop_loss"] > _cap:
+                                risk["stop_loss"] = _cap
+                except Exception:
+                    pass
+
             # ===============================
             # AI Trade Score
             # ===============================
