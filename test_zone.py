@@ -26,7 +26,7 @@ def check(name, ok, detail=""):
         print(f"  [FAIL] {name} {detail}")
 
 
-def make_df(price=3320.0, last_open=3300.0, last_close=3302.0,
+def make_df(price=3304.0, last_open=3300.0, last_close=3302.0,
             last_high=3304.0, last_low=3299.0, rsi=40.0):
     n = 60
     rows = []
@@ -54,7 +54,7 @@ check("zone support <= close", (z_buy.get("zone") or {}).get("lo", 9999) < 3302.
       z_buy.get("zone"))
 
 print("\n=== Zone analyze: SELL di resistance ===")
-sell_df = make_df(price=3320.0, last_open=3410.0, last_close=3408.0,
+sell_df = make_df(price=3404.0, last_open=3410.0, last_close=3408.0,
                   last_high=3412.0, last_low=3406.0, rsi=60.0)
 z_sell = ZS.analyze_from_dfs(sell_df, sell_df)
 check("SELL terdeteksi", z_sell["direction"] == "SELL" and z_sell["trigger"], z_sell)

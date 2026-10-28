@@ -75,12 +75,9 @@ class NewsFilter:
                 continue
 
             try:
-                dt_str = event["date"]
-                if dt_str.endswith(":00") and len(dt_str) > 19:
-                    dt_str = dt_str[:-6]
-                event_time = datetime.fromisoformat(dt_str)
+                event_time = datetime.fromisoformat(event["date"])
                 if event_time.tzinfo is not None:
-                    event_time = event_time.replace(tzinfo=None)
+                    event_time = event_time.astimezone().replace(tzinfo=None)  # ET -> lokal
             except Exception:
                 continue
 

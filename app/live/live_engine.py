@@ -495,6 +495,7 @@ class LiveEngine:
         self._last_closed_direction = None
         self._last_closed_time = None
         self._last_closed_was_win = True
+        self._load_reentry_state()
         self._last_same_dir_entry = {}
         self._same_dir_spacing = 60.0
         try:
@@ -1270,6 +1271,7 @@ class LiveEngine:
                 self._last_closed_direction = self._ticket_direction(closed_tickets)
                 self._last_closed_time = datetime.now()
                 self._last_closed_was_win = self._ticket_profit(closed_tickets) >= 0
+                self._save_reentry_state()
                 self._track_consecutive_losses(closed_tickets)
             self._seen_tickets = active_tickets
 
@@ -1523,6 +1525,16 @@ class LiveEngine:
                     market_last=last,
                     regime=regime
                 )
+
+                # Entry = harga eksekusi nyata (BUY di ask, SELL di bid), bukan close bar
+                # (bid): selisih spread ~0.24 membuat TP/hard SL BUY meleset dari yang dihitung.
+                try:
+                    _tk = mt5.symbol_info_tick(self.symbol)
+                    _px = float(_tk.ask if decision["action"] == "BUY" else _tk.bid)
+                    if _px > 0 and abs(_px - float(risk["entry_price"])) <= 2.0:  # sanity: tick basi/salah
+                        risk["entry_price"] = _px
+                except Exception:
+                    pass
 
             RiskView.show(risk)
 
@@ -1851,6 +1863,9 @@ class LiveEngine:
                         symbol=self.symbol
 
                     )
+
+                    if result.get("status") == "SUCCESS":
+                        self._enforce_hard_sl_after_fill(result)
 
             AutoTraderView.show(result)
 
@@ -2250,6 +2265,74 @@ class LiveEngine:
             return total
         except Exception:
             return 0.0
+
+    REENTRY_STATE_PATH = "runtime/reentry_state.json"
+
+    def _load_reentry_state(self):
+        """Pulihkan cooldown re-entry setelah restart."""
+        try:
+            with open(self.REENTRY_STATE_PATH) as f:
+                d = json.load(f)
+            _t = d.get("time")
+            if _t:
+                self._last_closed_time = datetime.fromisoformat(_t)
+                self._last_closed_direction = d.get("direction")
+                self._last_closed_was_win = bool(d.get("was_win", True))
+        except Exception:
+            pass
+
+    def _save_reentry_state(self):
+        try:
+            Path("runtime").mkdir(exist_ok=True)
+            with open(self.REENTRY_STATE_PATH, "w") as f:
+                json.dump({
+                    "time": (self._last_closed_time.isoformat(timespec="seconds")
+                             if self._last_closed_time else None),
+                    "direction": self._last_closed_direction,
+                    "was_win": bool(self._last_closed_was_win),
+                }, f)
+        except Exception:
+            pass
+
+    def _enforce_hard_sl_after_fill(self, result):
+        """Pasang hard SL dari harga fill aktual.
+
+        SL pra-fill dihitung dari harga keputusan; slippage market order
+        (0.1-0.3) membuat risiko nyata melebihi hard_sl_usd.
+        """
+        try:
+            _hard = float(get_trade_config("hard_sl_usd", 0) or 0)
+        except Exception:
+            return
+        if _hard <= 0:
+            return
+        for _r in result.get("results", []) or []:
+            _res = _r.get("result") if isinstance(_r, dict) else None
+            if not isinstance(_res, dict) or not _res.get("order"):
+                continue
+            try:
+                _ticket = int(_res["order"])
+                _pos = mt5.positions_get(ticket=_ticket)
+            except Exception:
+                continue
+            if not _pos:
+                continue
+            _p = _pos[0]
+            _is_buy = _p.type == mt5.POSITION_TYPE_BUY
+            _cap = round(_p.price_open - _hard, 5) if _is_buy else round(_p.price_open + _hard, 5)
+            _cur = float(_p.sl or 0)
+            _worse = (_cur == 0) or (_cur < _cap if _is_buy else _cur > _cap)
+            if not _worse:
+                continue
+            try:
+                self.controller.modify_sl(_p, _cap)
+                with open("runtime/hard_sl_fix.log", "a") as f:
+                    f.write(
+                        f"{time.strftime('%Y-%m-%d %H:%M:%S')} ticket={_ticket} "
+                        f"open={_p.price_open} sl {_cur} -> {_cap}\n"
+                    )
+            except Exception:
+                pass
 
     def _reentry_blocked(self, decision_action, cooldown_minutes=15, cooldown_win_minutes=5):
         if cooldown_minutes <= 0:

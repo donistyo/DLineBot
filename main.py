@@ -43,8 +43,9 @@ def main():
     dataset = DatasetManager()
 
     cleaner = DataCleaner()
-    labeler = LabelGenerator()
-    splitter = DataSplitter()
+    # Label & backtester harus memakai barrier yang sama: TP 2xATR, SL 1xATR, maks 30 bar
+    labeler = LabelGenerator(tp_atr=2.0, sl_atr=1.0, max_bars=30)
+    splitter = DataSplitter(embargo=30)  # = max_bars label
 
     trainer = XGBoostTrainer()
     evaluator = Evaluator()
@@ -54,7 +55,10 @@ def main():
     risk_manager = RiskManager()
     report_exporter = ReportExporter()
     summary_report = SummaryReport()
-    backtester = Backtester()
+    backtester = Backtester(
+        tp_atr=2.0, sl_atr=1.0, max_bars=30,
+        symbol="XAUUSDc", timeframe="M1"
+    )
 
     performance_analyzer = PerformanceAnalyzer()
     trade_history = TradeHistory()
@@ -78,7 +82,7 @@ def main():
     df = collector.load(
         symbol="XAUUSDc",
         timeframe="M1",
-        bars=2000
+        bars=99999  # ~70 hari M1; tepat 100000 (= maxbars terminal) ditolak MT5
     )
 
     print("[OK] Data berhasil diambil")
@@ -470,7 +474,8 @@ def main():
 
     model_path = model_manager.save(
         model,
-        "xgboost_xauusd_m1.joblib"
+        # nama beda: file xgboost_xauusd_m1.joblib dipakai autotrade yang sedang jalan
+        "xgboost_xauusd_m1_tb.joblib"
     )
 
     print(f"\n[OK] Model disimpan : {model_path}")

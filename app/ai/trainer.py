@@ -9,21 +9,21 @@ class XGBoostTrainer:
 
         self.model = XGBClassifier(
 
-            objective="binary:logistic",
-
+            # objective tidak diset: XGBoost memilih multi:softprob otomatis untuk 3 kelas
             n_estimators=200,
 
             learning_rate=0.05,
 
-            max_depth=6,
+            # dangkal + min_child_weight: data M1 sangat noisy, pohon dalam cepat overfit
+            max_depth=4,
+
+            min_child_weight=5,
 
             subsample=0.8,
 
             colsample_bytree=0.8,
 
-            random_state=42,
-
-            eval_metric="mlogloss"
+            random_state=42
         )
 
     def train(

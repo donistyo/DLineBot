@@ -1,7 +1,7 @@
 {
   "max_trade": 20,
-  "equity_floor": 65,
-  "max_positions": 4,
+  "equity_floor": 0,
+  "max_positions": 1,
   "lot_size": 0.01,
   "entry_copies_mode": "single",
   "max_lot": 0.02,
@@ -109,5 +109,7 @@
   "zone_fast_tp": 1,
   "zone_trail_start_usd": 1.5,
   "zone_trail_gap_usd": 1.0,
-  "hard_sl_usd": 4.5
+  "hard_sl_usd": 4.5,
+  "cooldown_win_min": 2,
+  "execution_mode": "ea"
 }

@@ -2,6 +2,9 @@ import traceback
 import datetime
 import MetaTrader5 as mt5
 
+from types import SimpleNamespace
+
+from app.mt5 import ea_bridge
 from app.mt5.session import MT5Session
 
 
@@ -18,6 +21,15 @@ def _log_close(caller, ticket, symbol, profit):
                 f.write(line)
     except:
         pass
+
+
+def _order_send(request):
+    """Exit/modify lewat EA bila execution_mode=ea; EA diam -> fallback langsung."""
+    if ea_bridge.enabled():
+        ack = ea_bridge.execute(request)
+        if ack is not None:
+            return SimpleNamespace(**ack)
+    return mt5.order_send(request)
 
 
 class PositionController:
@@ -111,7 +123,7 @@ class PositionController:
 
         }
 
-        result = mt5.order_send(request)
+        result = _order_send(request)
 
         success = result.retcode == mt5.TRADE_RETCODE_DONE
 
@@ -192,7 +204,7 @@ class PositionController:
 
         }
 
-        result = mt5.order_send(request)
+        result = _order_send(request)
 
         return {
 
@@ -224,7 +236,7 @@ class PositionController:
 
         }
 
-        result = mt5.order_send(request)
+        result = _order_send(request)
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             try:
@@ -263,7 +275,7 @@ class PositionController:
 
         }
 
-        result = mt5.order_send(request)
+        result = _order_send(request)
 
         return {
 
@@ -300,7 +312,7 @@ class PositionController:
 
         }
 
-        result = mt5.order_send(request)
+        result = _order_send(request)
 
         return {
 

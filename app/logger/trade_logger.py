@@ -34,7 +34,12 @@ class TradeLogger:
 
             "symbol": "XAUUSD",
 
-            "signal": prediction["signal"],
+            # arah order sebenarnya (keputusan), bukan sinyal model AI
+            "signal": (
+                decision["action"]
+                if decision["action"] != "NO_TRADE"
+                else prediction["signal"]
+            ),
 
             "confidence": prediction["confidence"],
 

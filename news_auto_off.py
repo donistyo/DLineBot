@@ -7,6 +7,7 @@ from pathlib import Path
 URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 ENABLED_FILE = Path(r"C:\Project\Bot\DLineBot\runtime\auto_trade_enabled.json")
 NEWS_FLAG = Path(r"C:\Project\Bot\DLineBot\runtime\news_off_active.json")
+CACHE = Path(r"C:\Project\Bot\DLineBot\runtime\news_calendar_cache.json")
 OFF_MINUTES = 20
 REENABLE_AFTER_MIN = 10
 WINDOW_START = (5, 50)   # 05:50 WIB
@@ -48,8 +49,17 @@ def try_reenable(now):
 
 def fetch():
     req = urllib.request.Request(URL, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception:
+        # kalender mingguan: cache terakhir tetap valid; tanpa ini 429 membuat bot buta terhadap news
+        if CACHE.exists() and time.time() - CACHE.stat().st_mtime < 12 * 3600:
+            print("[news-off] fetch gagal, pakai cache kalender")
+            return json.loads(CACHE.read_text())
+        raise
+    CACHE.write_text(json.dumps(data))
+    return data
 
 
 def main():
@@ -66,12 +76,10 @@ def main():
                 if ev.get("country", "") != "USD" or ev.get("impact", "") != "High":
                     continue
                 d = ev.get("date", "")
-                if d.endswith(":00") and len(d) > 19:
-                    d = d[:-6]
                 try:
                     t = datetime.fromisoformat(d)
                     if t.tzinfo:
-                        t = t.replace(tzinfo=None)
+                        t = t.astimezone().replace(tzinfo=None)  # offset feed (ET) -> jam lokal
                 except Exception:
                     continue
                 diff = (t - now).total_seconds()

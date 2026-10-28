@@ -2,16 +2,35 @@ import pandas as pd
 
 
 class Backtester:
+    """
+    Simulasi trade berbasis harga: tiap sinyal BUY/SELL dieksekusi di close bar,
+    lalu bar berikutnya dicek mana yang kena duluan: SL, TP, atau batas waktu.
+    SL & TP = sl_atr/tp_atr x ATR (harus sama dengan LabelGenerator triple-barrier).
+    Satu posisi sekali waktu, sinyal HOLD dilewati, spread dikurangkan.
+    Profit = R-multiple x (risk_percent x balance).
+    """
 
     def __init__(
         self,
         initial_balance=1000,
-        profit_per_win=10,
-        loss_per_trade=5
+        risk_percent=1.0,
+        tp_atr=2.0,
+        sl_atr=1.0,
+        max_bars=30,
+        min_confidence=0.5,
+        point=0.001,  # XAUUSDc Exness: symbol_info().point = 0.001
+        symbol="XAUUSD",
+        timeframe="M1"
     ):
         self.initial_balance = initial_balance
-        self.profit_per_win = profit_per_win
-        self.loss_per_trade = loss_per_trade
+        self.risk_percent = risk_percent
+        self.tp_atr = tp_atr
+        self.sl_atr = sl_atr
+        self.max_bars = max_bars
+        self.min_confidence = min_confidence
+        self.point = point
+        self.symbol = symbol
+        self.timeframe = timeframe
 
     def run(
         self,
@@ -21,164 +40,126 @@ class Backtester:
         df_test
     ):
 
-        # ==========================================
-        # Prediction
-        # ==========================================
-
         predictions = model.predict(X_test)
         probabilities = model.predict_proba(X_test)
 
-        signal_map = {
-            0: "SELL",
-            1: "HOLD",
-            2: "BUY"
-        }
+        signal_map = {0: "SELL", 1: "HOLD", 2: "BUY"}
 
-        # ==========================================
-        # Backtesting Variable
-        # ==========================================
+        df_test = df_test.reset_index(drop=True)
+        n = len(df_test)
 
         balance = self.initial_balance
-
-        win = 0
-        loss = 0
-
-        history = []
+        history = [balance]
         trades = []
+        gross_profit = 0.0
+        gross_loss = 0.0
 
-        # ==========================================
-        # Loop Semua Trade
-        # ==========================================
+        i = 0
 
-        for i in range(len(predictions)):
+        # sinyal tanpa max_bars bar sesudahnya tidak bisa diselesaikan
+        while i < n - self.max_bars:
 
             pred = int(predictions[i])
-            actual = int(y_test.iloc[i])
-
-            signal = signal_map[pred]
-
             confidence = float(probabilities[i].max())
 
-            sell_prob = float(probabilities[i][0])
-            hold_prob = float(probabilities[i][1])
-            buy_prob = float(probabilities[i][2])
+            if pred == 1 or confidence < self.min_confidence:
+                i += 1
+                continue
 
-            entry_price = float(df_test.iloc[i]["close"])
+            signal = signal_map[pred]
+            row = df_test.iloc[i]
+            entry = float(row["close"])
+            atr = float(row["ATR"])
 
-            # Simulasi SL / TP
-            if signal == "BUY":
+            if not atr > 0:
+                i += 1
+                continue
 
-                stop_loss = entry_price - 10
-                take_profit = entry_price + 20
+            sl_dist = self.sl_atr * atr
+            tp_dist = self.tp_atr * atr
+            direction = 1 if signal == "BUY" else -1
+            stop_loss = entry - direction * sl_dist
+            take_profit = entry + direction * tp_dist
 
-            elif signal == "SELL":
+            exit_idx = i + self.max_bars
+            exit_price = float(df_test.iloc[exit_idx]["close"])
+            reason = "TIME"
 
-                stop_loss = entry_price + 10
-                take_profit = entry_price - 20
+            for j in range(i + 1, i + self.max_bars + 1):
+                hi = float(df_test.iloc[j]["high"])
+                lo = float(df_test.iloc[j]["low"])
 
-            else:
+                hit_sl = lo <= stop_loss if direction == 1 else hi >= stop_loss
+                hit_tp = hi >= take_profit if direction == 1 else lo <= take_profit
 
-                stop_loss = entry_price
-                take_profit = entry_price
+                # SL dan TP di bar yang sama: SL dianggap duluan (konservatif)
+                if hit_sl:
+                    exit_price, exit_idx, reason = stop_loss, j, "SL"
+                    break
+                if hit_tp:
+                    exit_price, exit_idx, reason = take_profit, j, "TP"
+                    break
 
-            # Simulasi hasil trade
-            if pred == actual:
-
-                profit = self.profit_per_win
-                result = "WIN"
-                exit_price = take_profit
-                win += 1
-
-            else:
-
-                profit = -self.loss_per_trade
-                result = "LOSS"
-                exit_price = stop_loss
-                loss += 1
+            spread_cost = float(row["spread"]) * self.point
+            pnl_price = direction * (exit_price - entry) - spread_cost
+            profit = (pnl_price / sl_dist) * balance * self.risk_percent / 100
 
             balance += profit
             history.append(balance)
 
-            # ==========================================
-            # Simpan History Trade
-            # ==========================================
+            if profit > 0:
+                gross_profit += profit
+            else:
+                gross_loss += -profit
 
             trades.append({
-
-                "trade": i + 1,
-                "time": str(df_test.iloc[i]["time"]),
-                "symbol": "XAUUSD",
-                "timeframe": "H1",
-
+                "trade": len(trades) + 1,
+                "time": str(row["time"]),
+                "exit_time": str(df_test.iloc[exit_idx]["time"]),
+                "symbol": self.symbol,
+                "timeframe": self.timeframe,
                 "signal": signal,
-
                 "prediction": pred,
-                "actual": actual,
-
+                "actual": int(y_test.iloc[i]),
                 "confidence": round(confidence, 4),
-
-                "sell_probability": round(sell_prob, 4),
-                "hold_probability": round(hold_prob, 4),
-                "buy_probability": round(buy_prob, 4),
-
-                "entry_price": round(entry_price, 2),
+                "sell_probability": round(float(probabilities[i][0]), 4),
+                "hold_probability": round(float(probabilities[i][1]), 4),
+                "buy_probability": round(float(probabilities[i][2]), 4),
+                "entry_price": round(entry, 2),
                 "stop_loss": round(stop_loss, 2),
                 "take_profit": round(take_profit, 2),
                 "exit_price": round(exit_price, 2),
-
+                "exit_reason": reason,
+                "bars_held": exit_idx - i,
+                "spread_cost": round(spread_cost, 4),
                 "profit": round(profit, 2),
                 "balance": round(balance, 2),
-
-                "result": result,
-
-                "ema20": round(float(df_test.iloc[i]["EMA20"]), 2),
-                "ema50": round(float(df_test.iloc[i]["EMA50"]), 2),
-                "ema200": round(float(df_test.iloc[i]["EMA200"]), 2),
-
-                "rsi": round(float(df_test.iloc[i]["RSI"]), 2),
-                "macd": round(float(df_test.iloc[i]["MACD"]), 4),
-                "adx": round(float(df_test.iloc[i]["ADX"]), 2),
-                "atr": round(float(df_test.iloc[i]["ATR"]), 2),
-
-                "spread": int(df_test.iloc[i]["spread"]),
-                "volume": int(df_test.iloc[i]["tick_volume"])
-
+                "result": "WIN" if profit > 0 else "LOSS",
+                "ema20": round(float(row["EMA20"]), 2),
+                "ema50": round(float(row["EMA50"]), 2),
+                "ema200": round(float(row["EMA200"]), 2),
+                "rsi": round(float(row["RSI"]), 2),
+                "macd": round(float(row["MACD"]), 4),
+                "adx": round(float(row["ADX"]), 2),
+                "atr": round(atr, 2),
+                "spread": int(row["spread"]),
+                "volume": int(row["tick_volume"])
             })
 
-        # ==========================================
-        # Convert ke DataFrame
-        # ==========================================
+            i = exit_idx + 1  # satu posisi sekali waktu
 
-        trade_df = pd.DataFrame(trades)
-
-        # ==========================================
-        # Return Report
-        # ==========================================
+        win = sum(t["result"] == "WIN" for t in trades)
 
         return {
-
             "initial_balance": self.initial_balance,
-
             "ending_balance": balance,
-
-            "net_profit": round(
-                balance - self.initial_balance,
-                2
-            ),
-
-            "total_trade": len(predictions),
-
+            "net_profit": round(balance - self.initial_balance, 2),
+            "total_trade": len(trades),
             "win": win,
-
-            "loss": loss,
-
-            "win_rate": round(
-                (win / len(predictions)) * 100,
-                2
-            ),
-
+            "loss": len(trades) - win,
+            "win_rate": round(win / len(trades) * 100, 2) if trades else 0.0,
+            "gross_profit": gross_profit,
+            "gross_loss": gross_loss,
             "history": history,
-
-            "trades": trade_df
-
+            "trades": pd.DataFrame(trades)
         }

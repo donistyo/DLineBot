@@ -176,6 +176,22 @@ class AutoTrader:
         # ======================================
 
         signal = decision["action"]
+
+        # SL/TP (jika diisi; 0 = tanpa SL/TP, mode SL+) harus di sisi yang benar
+        # terhadap arah order. Order terbalik ditolak broker atau langsung kena stop.
+        _ep = float(risk.get("entry_price") or 0)
+        _sl = float(risk.get("stop_loss") or 0)
+        _tp = float(risk.get("take_profit") or 0)
+        _up = signal == "BUY"
+        if _ep > 0 and (
+            (_sl and (_sl >= _ep if _up else _sl <= _ep))
+            or (_tp and (_tp <= _ep if _up else _tp >= _ep))
+        ):
+            return {
+                "status": "SKIPPED",
+                "reason": f"SL/TP tidak sesuai arah {signal}: entry {_ep}, SL {_sl}, TP {_tp}"
+            }
+
         copies = resolve_entry_copies(decision, self._entry_copies())
         try:
             _magic = int(decision.get("magic") or risk.get("magic") or 10001)

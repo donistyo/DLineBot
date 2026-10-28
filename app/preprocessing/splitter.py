@@ -25,8 +25,12 @@ class DataSplitter:
         validation_size: float = 0.15,
         test_size: float = 0.15,
         shuffle: bool = False,
-        random_state: int = 42
+        random_state: int = 42,
+        embargo: int = 0
     ):
+        # embargo: jumlah bar dibuang di antara train/valid/test agar label (yang melihat
+        # max_bars ke depan) tidak bocor lintas batas; isi = max_bars label
+        self.embargo = embargo
         self.train_size = train_size
         self.validation_size = validation_size
         self.test_size = test_size
@@ -54,6 +58,19 @@ class DataSplitter:
 
         logger.info(f"Jumlah Feature : {X.shape[1]}")
         logger.info(f"Jumlah Dataset : {len(df)}")
+
+        if self.embargo > 0 and not self.shuffle:
+            # split kronologis dengan jarak embargo antar segmen
+            n = len(df)
+            e = self.embargo
+            i1 = int(n * self.train_size)
+            i2 = i1 + e + int((n - i1 - e) * self.validation_size /
+                              (self.validation_size + self.test_size))
+            logger.info(f"Split kronologis dengan embargo {e} bar")
+            return (
+                X.iloc[:i1], X.iloc[i1 + e:i2], X.iloc[i2 + e:],
+                y.iloc[:i1], y.iloc[i1 + e:i2], y.iloc[i2 + e:]
+            )
 
         # ==================================
         # Split Train & Temp

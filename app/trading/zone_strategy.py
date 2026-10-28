@@ -255,6 +255,25 @@ def analyze_from_dfs(df_m5, df_m15):
         except Exception:
             pass
 
+        # Filter impuls M5: jangan melawan dorongan 1 jam (12 bar M5) yang kuat,
+        # walau ADX M15 rendah. Data live: BUY zona saat harga turun >= 2xATR dalam
+        # 1 jam menembus support (kerugian dominan zona). 0 = nonaktif.
+        try:
+            _imp = _cfg("zone_impulse_block_atr", 2.0)
+            if _imp > 0 and len(df_m5) > 13:
+                _move = (close - float(df_m5["close"].iloc[-13])) / atr
+                _want = best[1]["direction"]
+                if (_want == "BUY" and _move <= -_imp) or (_want == "SELL" and _move >= _imp):
+                    base["blocked_by"] = "M5_IMPULSE"
+                    base["m5_move_atr"] = round(_move, 2)
+                    base["reason"] = (
+                        f"Zona {_want} ditolak: M5 bergerak {_move:+.1f}xATR dalam 1 jam "
+                        f"(batas {_imp:.1f}) - hindari melawan impuls"
+                    )
+                    return base
+        except Exception:
+            pass
+
         base.update(best[1])
         return base
 

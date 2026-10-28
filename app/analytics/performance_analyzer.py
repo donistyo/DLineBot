@@ -40,9 +40,9 @@ class PerformanceAnalyzer:
         # Profit Factor (versi sederhana)
         # =====================================
 
-        gross_profit = max(net_profit, 0)
+        gross_profit = report.get("gross_profit", max(net_profit, 0))
 
-        gross_loss = abs(min(net_profit, 0))
+        gross_loss = report.get("gross_loss", abs(min(net_profit, 0)))
 
         if gross_loss == 0:
             profit_factor = float("inf")
