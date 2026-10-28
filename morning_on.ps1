@@ -2,6 +2,11 @@ $root = $PSScriptRoot
 $log = Join-Path $root "logs\morning_start.log"
 function Log($m) { "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $m" | Add-Content -Path $log }
 
+if ((Get-Date).DayOfWeek -in @([DayOfWeek]::Saturday, [DayOfWeek]::Sunday)) {
+    Log "=== Weekend - market tutup, morning start dilewati ==="
+    exit 0
+}
+
 Log "=== Morning start dimulai ==="
 
 $up = $false
