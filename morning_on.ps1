@@ -2,6 +2,12 @@ $root = $PSScriptRoot
 $log = Join-Path $root "logs\morning_start.log"
 function Log($m) { "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $m" | Add-Content -Path $log }
 
+$local_off = Join-Path $root "runtime\local_bot_off.flag"
+if (Test-Path $local_off) {
+    Log "=== local_bot_off.flag aktif - morning start dilewati (bot jalan di PC lain) ==="
+    exit 0
+}
+
 if ((Get-Date).DayOfWeek -in @([DayOfWeek]::Saturday, [DayOfWeek]::Sunday)) {
     Log "=== Weekend - market tutup, morning start dilewati ==="
     exit 0
