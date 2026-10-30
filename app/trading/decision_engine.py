@@ -1,5 +1,24 @@
+def balance_layers():
+    """Layer entry menurut saldo: > layers_balance_threshold (150) -> 2, selain itu 1.
+    None bila saldo tidak terbaca (pemanggil memakai aturan lama)."""
+    try:
+        import MetaTrader5 as mt5
+        from app.config.settings import get_trade_config
+        acc = mt5.account_info()
+        if acc is None:
+            return None
+        thr = float(get_trade_config("layers_balance_threshold", 150) or 150)
+        return 2 if acc.balance > thr else 1
+    except Exception:
+        return None
+
+
 def _min_entry_layers():
-    """Jumlah layer minimum per entry (config entry_min_layers, default 2)."""
+    """Jumlah layer minimum per entry: ikut saldo (balance_layers), fallback
+    config entry_min_layers (default 2)."""
+    _bl = balance_layers()
+    if _bl:
+        return _bl
     try:
         from app.config.settings import get_trade_config
         return max(1, int(get_trade_config("entry_min_layers", 2) or 2))

@@ -115,7 +115,12 @@ class PositionController:
 
             "magic": 10001,
 
-            "comment": f"{caller} CLOSE",
+            # alasan close (+ profit saat close, kecuali FAST_TP); MT5 membatasi comment 31 karakter
+            "comment": (
+                f"{caller} CLOSE"
+                if str(caller).startswith("FAST_TP")
+                else f"{caller} CLOSE {position.profit:+.2f}"
+            )[:31],
 
             "type_time": mt5.ORDER_TIME_GTC,
 

@@ -115,7 +115,11 @@ def analyze_from_dfs(df_m5, df_m15):
     }
 
     try:
-        last = df_m5.iloc[-1]
+        # Evaluasi jalan beberapa detik setelah bar M5 baru dibuka, jadi bar
+        # terakhir hampir kosong (candle "konfirmasi" = noise). Pakai bar yang
+        # sudah tutup (iloc[-2]); 0 = perilaku lama (bar berjalan).
+        _k = -2 if (_cfg("zone_use_closed_bar", 1) and len(df_m5) >= 15) else -1
+        last = df_m5.iloc[_k]
         close = float(last["close"])
         op = float(last["open"])
         high = float(last["high"])
@@ -261,7 +265,7 @@ def analyze_from_dfs(df_m5, df_m15):
         try:
             _imp = _cfg("zone_impulse_block_atr", 2.0)
             if _imp > 0 and len(df_m5) > 13:
-                _move = (close - float(df_m5["close"].iloc[-13])) / atr
+                _move = (close - float(df_m5["close"].iloc[_k - 12])) / atr
                 _want = best[1]["direction"]
                 if (_want == "BUY" and _move <= -_imp) or (_want == "SELL" and _move >= _imp):
                     base["blocked_by"] = "M5_IMPULSE"

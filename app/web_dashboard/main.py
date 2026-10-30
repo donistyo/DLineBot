@@ -121,7 +121,7 @@ def _refresh_mt5_cache():
                 _mt5_cache["last_update"] = time.time()
         except:
             pass
-        time.sleep(2)
+        time.sleep(0.5)  # profit posisi aktif: cache segar tiap 0.5s (UI polling 1s)
 
 
 def _start_mt5_cache():
@@ -859,6 +859,71 @@ def api_intraday():
 # =====================================
 # Scalping API
 # =====================================
+
+@app.get("/api/recap/week")
+def api_recap_week(week: int = 0):
+    """Rekap per posisi Senin-Minggu (WIB). week=0 minggu ini, 1 minggu lalu, dst."""
+    import re
+    from collections import defaultdict
+    from datetime import timezone
+    try:
+        MT5Session.ensure_connection()
+        # shortcut: WIB (UTC+7) tetap; server MT5 = WIB-7, epoch deal dibaca UTC.
+        wib = timezone(timedelta(hours=7))
+        now = datetime.now(wib)
+        mon = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        mon -= timedelta(weeks=max(0, int(week)))
+        end = mon + timedelta(days=7)
+        a, b = mon.astimezone(timezone.utc), end.astimezone(timezone.utc)
+        deals = mt5.history_deals_get(a - timedelta(days=1), b + timedelta(hours=1)) or []
+        pos = defaultdict(list)
+        for d in deals:
+            if d.symbol:
+                pos[d.position_id].append(d)
+        rows = []
+        for ds in pos.values():
+            ds.sort(key=lambda x: x.time)
+            ins = [x for x in ds if x.entry == 0]
+            outs = [x for x in ds if x.entry != 0]
+            if not ins or not outs or not (a.timestamp() <= outs[-1].time < b.timestamp()):
+                continue
+            o = outs[-1]
+            if o.reason == 4:
+                kind = "SL broker"
+            elif o.reason == 5:
+                kind = "TP broker"
+            else:
+                kind = re.sub(r"\s*[+-]?\d+\.\d+$", "", str(o.comment or "")).strip()[:24] or "lain"
+            rows.append({
+                "day": (datetime.fromtimestamp(o.time, timezone.utc) + timedelta(hours=7)).strftime("%a %d/%m"),
+                "magic": ins[0].magic,
+                "kind": kind,
+                "profit": sum(x.profit + x.commission + x.swap for x in ds),
+            })
+
+        def agg(rs):
+            w = [r["profit"] for r in rs if r["profit"] > 0]
+            l = [r["profit"] for r in rs if r["profit"] <= 0]
+            return {"n": len(rs), "net": round(sum(r["profit"] for r in rs), 2),
+                    "win": round(len(w) / len(rs) * 100) if rs else 0,
+                    "avg_win": round(sum(w) / len(w), 2) if w else 0,
+                    "avg_loss": round(sum(l) / len(l), 2) if l else 0}
+
+        def group(key, names=None):
+            g = defaultdict(list)
+            for r in rows:
+                g[r[key]].append(r)
+            return [dict(name=(names or {}).get(k, str(k)), **agg(v)) for k, v in g.items()]
+
+        acc = mt5.account_info()
+        return {"ok": True, "start": mon.strftime("%Y-%m-%d"), "end": (end - timedelta(days=1)).strftime("%Y-%m-%d"),
+                "total": agg(rows),
+                "by_strategy": group("magic", {10001: "Scalp", 10003: "Zona"}),
+                "by_day": group("day"), "by_exit": sorted(group("kind"), key=lambda x: x["net"]),
+                "balance": round(acc.balance, 2) if acc else None}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 
 @app.get("/api/scalping")
 def api_scalping():
@@ -1890,6 +1955,21 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 <h2>Today's Performance</h2>
 <div class="grid" id="scalpingPerfBox"></div>
 
+<h2>Rekap Mingguan</h2>
+<div style="margin-bottom:8px">
+  <select id="recapWeek" style="padding:6px;border-radius:6px"><option value="0">Minggu ini</option><option value="1">Minggu lalu</option><option value="2">2 minggu lalu</option></select>
+  <button onclick="loadWeekRecap()" style="padding:6px 14px;border-radius:6px;cursor:pointer">Ambil Rekap</button>
+</div>
+<div id="weekRecapModal" onclick="if(event.target===this)closeWeekRecap()" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(2,6,23,0.75);align-items:center;justify-content:center;padding:16px">
+  <div style="background:#0f172a;border:1px solid rgba(59,130,246,0.25);border-radius:12px;width:min(760px,100%);max-height:86vh;overflow:auto;padding:16px 18px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <b style="color:#e2e8f0;font-size:15px">Rekap Mingguan</b>
+      <button onclick="closeWeekRecap()" style="background:none;border:0;color:#94a3b8;font-size:18px;cursor:pointer" aria-label="Tutup">&#10005;</button>
+    </div>
+    <div id="weekRecapBox" style="font-size:13px;color:#94a3b8"></div>
+  </div>
+</div>
+
 <h2>Scalp Score</h2>
 <div class="grid" id="scalpingScoreDetail" style="grid-template-columns:repeat(auto-fit,minmax(100px,1fr))"></div>
 
@@ -2678,6 +2758,7 @@ async function fetchAutoTradeMonitor() {
     actEl.style.color = act === 'TRADE' ? '#6ee7b7' : '#f87171';
 
     const pos = d.positions || [];
+    window._hasPos = pos.length > 0;
     document.getElementById('atm_pos_count').textContent = pos.length;
     document.getElementById('atm_positions').innerHTML = pos.length ? pos.map(p =>
       '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #0f172a">' +
@@ -3008,6 +3089,27 @@ setInterval(fetchData, 15000);
 setInterval(fetchPublicUrl, 30000);
 setInterval(() => { if (analyticsLoaded && document.getElementById('tab-analytics').style.display !== 'none') fetchAnalytics(); }, 30000);
 setInterval(() => { if (learningLoaded && document.getElementById('tab-learning').style.display !== 'none') fetchLearningRecords(); }, 45000);
+
+// Profit posisi aktif: refresh tiap 1 detik, hanya saat ada posisi dan tab terlihat
+let _fastPosBusy = false;
+setInterval(async () => {
+  if (_fastPosBusy) return;
+  const shown = id => { const e = document.getElementById(id); return e && e.style.display !== 'none'; };
+  if (!(window._hasPos || (window._tvMonData && (window._tvMonData.positions || []).length))) return;
+  _fastPosBusy = true;
+  try {
+    if (shown('tab-manual')) await fetchAutoTradeMonitor();
+    if (shown('tab-tradingview')) {
+      const mon = await fetchJson('/api/auto-trade/monitor', null);
+      if (mon) {
+        window._tvMonData = mon;
+        window._hasPos = (mon.positions || []).length > 0;
+        renderTVPosition(mon.positions || [], mon.tick || {});
+        updateTVPositionLabels(mon.positions || []);
+      }
+    }
+  } catch (e) {} finally { _fastPosBusy = false; }
+}, 1000);
 
 // Manual chart + monitor refresh every 10 detik
 setInterval(() => {
@@ -3862,7 +3964,7 @@ async function fetchTVMonitor() {
     }, null, 2);
   }
 
-  renderTVSignal(scalp.scalp_score || {}, mtf.tfs || {});
+  renderTVSignal(scalp.scalp_score || {}, mtf.tfs || {}, ck || {});
   // Store mon data globally for position lines
   window._tvMonData = mon;
   renderTVPosition(mon.positions || [], mon.tick || {});
@@ -3919,13 +4021,46 @@ function renderTvChecklist(ck) {
   body.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">' + chips + '</div>' + verdict;
 }
 
-function renderTVSignal(ss, tfs) {
+function closeWeekRecap() { document.getElementById('weekRecapModal').style.display = 'none'; }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeWeekRecap(); });
+
+async function loadWeekRecap() {
+  const box = document.getElementById('weekRecapBox');
+  document.getElementById('weekRecapModal').style.display = 'flex';
+  box.textContent = 'Memuat...';
+  const w = document.getElementById('recapWeek').value;
+  const r = await fetchJson('/api/recap/week?week=' + w, {ok:false, error:'gagal memuat'});
+  if (!r.ok) { box.textContent = 'Error: ' + (r.error || '-'); return; }
+  const col = v => v > 0 ? '#6ee7b7' : v < 0 ? '#fca5a5' : '#94a3b8';
+  const row = (name, x) => '<tr><td>' + escapeHtml(name) + '</td><td>' + x.n + '</td><td style="color:' + col(x.net) + '">' + x.net.toFixed(2) +
+    '</td><td>' + x.win + '%</td><td>' + x.avg_win.toFixed(2) + '</td><td>' + x.avg_loss.toFixed(2) + '</td></tr>';
+  const tbl = (title, list) => '<h3 style="margin:12px 0 4px;color:#e2e8f0;font-size:13px">' + title + '</h3>' +
+    '<div class="table-wrap"><table><thead><tr><th></th><th>Trade</th><th>Net</th><th>Win</th><th>Rata menang</th><th>Rata kalah</th></tr></thead><tbody>' +
+    list.map(x => row(x.name, x)).join('') + '</tbody></table></div>';
+  const t = r.total;
+  box.innerHTML = '<div>' + r.start + ' s/d ' + r.end + ' (WIB) &middot; saldo sekarang ' + (r.balance == null ? '-' : r.balance) + '</div>' +
+    tbl('Total', [{name:'Semua', ...t}]) + tbl('Per strategi', r.by_strategy) + tbl('Per hari', r.by_day) + tbl('Per jenis exit', r.by_exit);
+}
+
+function renderTVSignal(ss, tfs, ck) {
   const dirEl = document.getElementById('tvSignalDir');
   const scoreEl = document.getElementById('tvSignalScore');
   const score = ss.score || 0;
-  const dir = String(ss.direction || ss.action || 'WAIT').toUpperCase();
+  // Arah = keputusan bot (scalp ATAU zona); WAIT bila NO_TRADE.
+  const act = String((ck && ck.decision_action) || '').toUpperCase();
+  const dir = (act === 'BUY' || act === 'SELL') ? act : 'WAIT';
 
   scoreEl.textContent = Math.round(score);
+  let sub = document.getElementById('tvSignalSub');
+  if (!sub) {
+    sub = document.createElement('div');
+    sub.id = 'tvSignalSub';
+    sub.style.cssText = 'font-size:11px;color:#94a3b8;padding:2px 0 6px';
+    dirEl.closest('.tv-signal-main').after(sub);
+  }
+  const strat = (ck && ck.strategy) ? ck.strategy : '';
+  const held = (dir === 'WAIT' && ck && (ck.direction === 'BUY' || ck.direction === 'SELL')) ? 'Sinyal ' + ck.direction + ' ditahan: ' : '';
+  sub.textContent = (strat ? '[' + strat + '] ' : '') + held + (dir === 'WAIT' && ck && ck.blocked_reason ? ck.blocked_reason : (ck && ck.decision_reason) || '');
   let dirColor = '#fbbf24', dirLabel = 'WAIT';
   if (dir === 'BUY') { dirColor = '#6ee7b7'; dirLabel = 'BUY'; }
   else if (dir === 'SELL') { dirColor = '#fca5a5'; dirLabel = 'SELL'; }

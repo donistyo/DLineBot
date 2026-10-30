@@ -26,7 +26,29 @@ def check(name, ok, detail=""):
         print(f"  [FAIL] {name} {detail}")
 
 
-def make_df(price=3304.0, last_open=3300.0, last_close=3302.0,
+# Fixture sintetis: candle trigger = bar terakhir.
+# Mode closed-bar (zone_use_closed_bar) diuji terpisah di bawah.
+_orig_cfg = ZS._cfg
+
+
+def _test_cfg(k, d=None):
+    if k in ("zone_use_closed_bar", "zone_impulse_block_atr"):
+        return 0
+    return _orig_cfg(k, d)
+
+
+def _cfg_closed_bar(k, d=None):
+    if k == "zone_use_closed_bar":
+        return _orig_cfg(k, d)
+    if k == "zone_impulse_block_atr":
+        return 0
+    return _orig_cfg(k, d)
+
+
+ZS._cfg = _test_cfg
+
+
+def make_df(price=3320.0, last_open=3300.0, last_close=3302.0,
             last_high=3304.0, last_low=3299.0, rsi=40.0):
     n = 60
     rows = []
@@ -54,7 +76,7 @@ check("zone support <= close", (z_buy.get("zone") or {}).get("lo", 9999) < 3302.
       z_buy.get("zone"))
 
 print("\n=== Zone analyze: SELL di resistance ===")
-sell_df = make_df(price=3404.0, last_open=3410.0, last_close=3408.0,
+sell_df = make_df(price=3320.0, last_open=3410.0, last_close=3408.0,
                   last_high=3412.0, last_low=3406.0, rsi=60.0)
 z_sell = ZS.analyze_from_dfs(sell_df, sell_df)
 check("SELL terdeteksi", z_sell["direction"] == "SELL" and z_sell["trigger"], z_sell)
@@ -89,6 +111,19 @@ d_scalp = de.decide(None, {"scalp_score": {"score": 10, "direction": "BUY", "gra
                     {"trend": "UP", "mode": "TREND", "adx": 30})
 check("scalp reject punya entry_strategy=scalp",
       d_scalp.get("entry_strategy") == "scalp", d_scalp)
+
+print("\n=== Zone pakai bar tutup (zone_use_closed_bar) ===")
+ZS._cfg = _cfg_closed_bar
+try:
+    df = make_df()
+    trig = df.iloc[-1].copy()
+    df.iloc[-1] = df.iloc[-2]
+    df.iloc[-2] = trig
+    z_cb = ZS.analyze_from_dfs(df, df)
+    check("closed bar: close = iloc[-2]", z_cb.get("close") == 3302.0, z_cb.get("close"))
+    check("closed bar: BUY terdeteksi", z_cb.get("direction") == "BUY", z_cb)
+finally:
+    ZS._cfg = _test_cfg
 
 print("\n========================================")
 print(f"PASS: {passed}   FAIL: {failed}")

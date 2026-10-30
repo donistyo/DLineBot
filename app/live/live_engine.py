@@ -10,7 +10,7 @@ from app.preprocessing.cleaner import DataCleaner
 from app.ai.model_loader import ModelLoader
 from app.ai.predictor import Predictor
 
-from app.trading.decision_engine import DecisionEngine
+from app.trading.decision_engine import DecisionEngine, balance_layers
 from app.trading.risk_manager import RiskManager
 from app.trading.position_sizing import PositionSizingAI
 from app.trading.multi_tf_confirmation import MultiTimeframeConfirmation
@@ -1106,6 +1106,16 @@ class LiveEngine:
             # premium_sl_quiet_min menit terakhir
             # (harga masih panas, jangan 10 layer).
             # ===============================
+            # Saldo <= layers_balance_threshold (150): paksa 1 layer
+            # (termasuk tier premium multi-layer).
+            try:
+                if (balance_layers() == 1
+                        and decision.get("action") in ("BUY", "SELL")
+                        and int(decision.get("entry_layers") or 0) > 1):
+                    decision["entry_layers"] = 1
+            except Exception:
+                pass
+
             try:
                 if int(decision.get("entry_layers") or 0) > 2:
                     _quiet_min = float(get_trade_config("premium_sl_quiet_min", 15) or 15)
@@ -2570,7 +2580,7 @@ class LiveEngine:
             # N layer instan = layer_count; fallback = dual 2.
             # Mode BBMA: selalu dual 2 fixed (tiering menyusul
             # setelah data slope_strength/dist terkumpul).
-            _layers = int(decision.get("entry_layers") or 2)
+            _layers = int(decision.get("entry_layers") or balance_layers() or 2)
             if _bbma_mode:
                 _label = "Entry 2 layer (BBMA fixed dual)"
             elif _layers > 2:
@@ -2667,6 +2677,7 @@ class LiveEngine:
                 "min_score": min_score,
                 "score": score,
                 "direction": direction,
+                "strategy": _active_strategy.upper(),
                 "items": items
             }
             with open("runtime/entry_checklist.json", "w") as _f:
