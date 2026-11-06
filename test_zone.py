@@ -125,6 +125,28 @@ try:
 finally:
     ZS._cfg = _test_cfg
 
+print("\n=== Filter searah M15+H1 (zone_htf_align) ===")
+ZS._cfg = lambda k, d=None: 1 if k == "zone_htf_align" else _test_cfg(k, d)
+try:
+    def _ema(df, e20, e50):
+        df = df.copy()
+        df["EMA20"], df["EMA50"] = e20, e50
+        return df
+
+    up, down = _ema(buy_df, 2.0, 1.0), _ema(buy_df, 1.0, 2.0)
+    check("BUY lolos saat M15 & H1 naik",
+          ZS.analyze_from_dfs(buy_df, up, up)["trigger"])
+    z = ZS.analyze_from_dfs(buy_df, down, up)
+    check("BUY diblok saat M15 turun", z["blocked_by"] == "HTF_ALIGN" and not z["trigger"], z)
+    z = ZS.analyze_from_dfs(buy_df, up, down)
+    check("BUY diblok saat H1 turun", z["blocked_by"] == "HTF_ALIGN", z)
+    z = ZS.analyze_from_dfs(sell_df, up, down)
+    check("SELL diblok saat M15 naik", z["blocked_by"] == "HTF_ALIGN", z)
+    check("SELL lolos saat M15 & H1 turun",
+          ZS.analyze_from_dfs(sell_df, down, down)["trigger"])
+finally:
+    ZS._cfg = _test_cfg
+
 print("\n========================================")
 print(f"PASS: {passed}   FAIL: {failed}")
 if failed == 0:

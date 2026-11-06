@@ -113,5 +113,6 @@
   "cooldown_win_min": 2,
   "execution_mode": "ea",
   "layers_balance_threshold": 150,
-  "zone_use_closed_bar": 1
+  "zone_use_closed_bar": 1,
+  "zone_htf_align": 1
 }

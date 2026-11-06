@@ -895,6 +895,7 @@ def api_recap_week(week: int = 0):
             else:
                 kind = re.sub(r"\s*[+-]?\d+\.\d+$", "", str(o.comment or "")).strip()[:24] or "lain"
             rows.append({
+                "ts": o.time,
                 "day": (datetime.fromtimestamp(o.time, timezone.utc) + timedelta(hours=7)).strftime("%a %d/%m"),
                 "magic": ins[0].magic,
                 "kind": kind,
@@ -904,7 +905,14 @@ def api_recap_week(week: int = 0):
         def agg(rs):
             w = [r["profit"] for r in rs if r["profit"] > 0]
             l = [r["profit"] for r in rs if r["profit"] <= 0]
-            return {"n": len(rs), "net": round(sum(r["profit"] for r in rs), 2),
+            peak = cum = dd = 0.0
+            for r in sorted(rs, key=lambda r: r["ts"]):
+                cum += r["profit"]
+                peak = max(peak, cum)
+                dd = max(dd, peak - cum)
+            net = sum(r["profit"] for r in rs)
+            return {"n": len(rs), "net": round(net, 2),
+                    "exp": round(net / len(rs), 2) if rs else 0, "dd": round(dd, 2),
                     "win": round(len(w) / len(rs) * 100) if rs else 0,
                     "avg_win": round(sum(w) / len(w), 2) if w else 0,
                     "avg_loss": round(sum(l) / len(l), 2) if l else 0}
@@ -4033,9 +4041,10 @@ async function loadWeekRecap() {
   if (!r.ok) { box.textContent = 'Error: ' + (r.error || '-'); return; }
   const col = v => v > 0 ? '#6ee7b7' : v < 0 ? '#fca5a5' : '#94a3b8';
   const row = (name, x) => '<tr><td>' + escapeHtml(name) + '</td><td>' + x.n + '</td><td style="color:' + col(x.net) + '">' + x.net.toFixed(2) +
-    '</td><td>' + x.win + '%</td><td>' + x.avg_win.toFixed(2) + '</td><td>' + x.avg_loss.toFixed(2) + '</td></tr>';
+    '</td><td>' + x.win + '%</td><td>' + x.avg_win.toFixed(2) + '</td><td>' + x.avg_loss.toFixed(2) +
+    '</td><td style="color:' + col(x.exp) + '">' + x.exp.toFixed(2) + '</td><td>' + x.dd.toFixed(2) + '</td></tr>';
   const tbl = (title, list) => '<h3 style="margin:12px 0 4px;color:#e2e8f0;font-size:13px">' + title + '</h3>' +
-    '<div class="table-wrap"><table><thead><tr><th></th><th>Trade</th><th>Net</th><th>Win</th><th>Rata menang</th><th>Rata kalah</th></tr></thead><tbody>' +
+    '<div class="table-wrap"><table><thead><tr><th></th><th>Trade</th><th>Net</th><th>Win</th><th>Rata menang</th><th>Rata kalah</th><th>Expectancy</th><th>Max DD</th></tr></thead><tbody>' +
     list.map(x => row(x.name, x)).join('') + '</tbody></table></div>';
   const t = r.total;
   box.innerHTML = '<div>' + r.start + ' s/d ' + r.end + ' (WIB) &middot; saldo sekarang ' + (r.balance == null ? '-' : r.balance) + '</div>' +

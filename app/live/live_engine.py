@@ -2682,6 +2682,25 @@ class LiveEngine:
             }
             with open("runtime/entry_checklist.json", "w") as _f:
                 json.dump(payload, _f, indent=2, ensure_ascii=False)
+            # Riwayat 1 baris per evaluasi M5 (checklist.json hanya menyimpan yang terakhir).
+            import csv, os
+            _hdr = ["time", "strategy", "action", "direction", "score", "min_score", "blocked", "failed",
+                    "zone_blocked_by", "zone_reason"]
+            _path = "runtime/entry_eval_history.csv"
+            if os.path.exists(_path):
+                with open(_path, encoding="utf-8") as _h:
+                    _old_hdr = _h.readline().strip().split(",")
+                if _old_hdr != _hdr:  # skema lama: simpan terpisah (di luar with: Windows)
+                    os.replace(_path, _path.replace(".csv", "_old.csv"))
+            _new = not os.path.exists(_path)
+            _z = (scalp_result or {}).get("zone") or {}
+            with open(_path, "a", newline="", encoding="utf-8") as _h:
+                _w = csv.writer(_h)
+                if _new:
+                    _w.writerow(_hdr)
+                _w.writerow([payload["timestamp"], payload["strategy"], action, direction, score, min_score,
+                             blocked_reason or "", "; ".join(i["label"] for i in items if not i["ok"]),
+                             _z.get("blocked_by") or "", str(_z.get("reason") or "")[:120]])
         except Exception as e:
             import traceback
             with open("runtime/checklist_error.log", "a") as _elog:

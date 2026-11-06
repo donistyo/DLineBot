@@ -86,7 +86,7 @@ def find_zones(df, atr, lookback=40, band_atr=0.30, merge_atr=0.8, violate_atr=0
     return out_sup[:2], out_res[:2]
 
 
-def analyze_from_dfs(df_m5, df_m15):
+def analyze_from_dfs(df_m5, df_m15, df_h1=None):
     """
     Keputusan zone dari dataframe M5/M15 yang sudah berindikator.
     Return dict: direction, trigger, reason, zone, rsi, atr, dist_atr,
@@ -278,6 +278,29 @@ def analyze_from_dfs(df_m5, df_m15):
         except Exception:
             pass
 
+        # Filter searah M15 + H1 (EMA20 vs EMA50 bar tutup): zona hanya boleh
+        # entri searah struktur timeframe besar. Data 28 trade zona: yang
+        # melawan M15/H1 net -24,2 (18 trade), yang searah net -1,2 (10 trade).
+        try:
+            if _cfg("zone_htf_align", 0):
+                _want = best[1]["direction"]
+                _opp = []
+                for _nm, _df in (("M15", df_m15), ("H1", df_h1)):
+                    if _df is None or len(_df) < 3:
+                        continue
+                    _r = _df.iloc[-2]
+                    _e20, _e50 = float(_r["EMA20"]), float(_r["EMA50"])
+                    if (_want == "BUY" and _e20 < _e50) or (_want == "SELL" and _e20 > _e50):
+                        _opp.append(_nm)
+                if _opp:
+                    base["blocked_by"] = "HTF_ALIGN"
+                    base["reason"] = (
+                        f"Zona {_want} ditolak: EMA20/50 {'+'.join(_opp)} melawan arah"
+                    )
+                    return base
+        except Exception:
+            pass
+
         base.update(best[1])
         return base
 
@@ -306,4 +329,6 @@ def analyze(symbol=None):
 
     df_m5 = _load("M5")
     df_m15 = _load("M15")
-    return analyze_from_dfs(df_m5, df_m15)
+    # H1: 300 bar hanya jika filter searah aktif (EMA50 butuh warmup panjang).
+    df_h1 = _load("H1") if _cfg("zone_htf_align", 0) else None
+    return analyze_from_dfs(df_m5, df_m15, df_h1)
