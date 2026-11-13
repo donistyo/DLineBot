@@ -860,6 +860,92 @@ def api_intraday():
 # Scalping API
 # =====================================
 
+_zones_cache = {"t": 0, "d": None}
+
+
+@app.get("/api/zones")
+def api_zones():
+    """Zona S/R yang sama dengan yang dipakai strategi zona (cache 30 detik)."""
+    if time.time() - _zones_cache["t"] > 30 or _zones_cache["d"] is None:
+        try:
+            from app.trading import zone_strategy
+            _zones_cache["d"] = zone_strategy.chart_zones(_active_symbol())
+            _zones_cache["t"] = time.time()
+        except Exception as e:
+            return {"error": str(e), "supports": [], "resistances": []}
+    return _zones_cache["d"]
+
+
+_levels_cache = {"t": 0, "d": None}
+
+
+@app.get("/api/levels")
+def api_levels():
+    """Peta level harian (pivot klasik dari hari kemarin + high/low) untuk garis di chart."""
+    if time.time() - _levels_cache["t"] > 60 or _levels_cache["d"] is None:
+        try:
+            import MetaTrader5 as mt5
+            bars = mt5.copy_rates_from_pos(_active_symbol(), mt5.TIMEFRAME_D1, 0, 2)
+            if bars is None or len(bars) < 2:
+                raise RuntimeError("data D1 tidak tersedia")
+            prev, cur = bars[0], bars[1]
+            h, l, c = float(prev["high"]), float(prev["low"]), float(prev["close"])
+            p = (h + l + c) / 3
+            _levels_cache["d"] = {"levels": [
+                {"name": "PDH · High kemarin", "price": h, "kind": "hl"},
+                {"name": "PDL · Low kemarin", "price": l, "kind": "hl"},
+                {"name": "R2 · Resisten kuat (target naik 2)", "price": p + (h - l), "kind": "res"},
+                {"name": "R1 · Resisten (target naik 1)", "price": 2 * p - l, "kind": "res"},
+                {"name": "PIVOT · Titik tengah hari ini", "price": p, "kind": "pivot"},
+                {"name": "S1 · Support (target turun 1)", "price": 2 * p - h, "kind": "sup"},
+                {"name": "S2 · Support kuat (target turun 2)", "price": p - (h - l), "kind": "sup"},
+                {"name": "HOD · High hari ini", "price": float(cur["high"]), "kind": "day"},
+                {"name": "LOD · Low hari ini", "price": float(cur["low"]), "kind": "day"},
+            ]}
+            _levels_cache["t"] = time.time()
+        except Exception as e:
+            return {"error": str(e), "levels": []}
+    return _levels_cache["d"]
+
+
+_trend_cache = {}
+
+
+@app.get("/api/trendlines")
+def api_trendlines(tf: str = "M15"):
+    """Garis tren otomatis: tarik garis lewat 2 swing high terakhir (resisten) dan 2 swing low terakhir (support)."""
+    tf = tf.upper()
+    hit = _trend_cache.get(tf)
+    if hit and time.time() - hit[0] < 30:
+        return hit[1]
+    try:
+        import MetaTrader5 as mt5
+        frame = getattr(mt5, "TIMEFRAME_" + tf, None)
+        if frame is None:
+            return {"error": "tf tidak dikenal", "lines": []}
+        bars = mt5.copy_rates_from_pos(_active_symbol(), frame, 0, 300)
+        if bars is None or len(bars) < 20:
+            raise RuntimeError("data tidak tersedia")
+        k = 3  # swing = puncak/lembah yang lebih ekstrem dari k candle di kiri & kanan (candle terakhir belum terkonfirmasi)
+        n = len(bars)
+        lines = []
+        for kind, col in (("res", "high"), ("sup", "low")):
+            sw = []
+            for i in range(k, n - k):
+                win = [float(bars[j][col]) for j in range(i - k, i + k + 1)]
+                v = float(bars[i][col])
+                if (kind == "res" and v == max(win)) or (kind == "sup" and v == min(win)):
+                    sw.append((int(bars[i]["time"]), v))
+            if len(sw) >= 2:
+                (t1, p1), (t2, p2) = sw[-2], sw[-1]
+                lines.append({"kind": kind, "t1": t1, "p1": p1, "t2": t2, "p2": p2})
+        data = {"lines": lines}
+    except Exception as e:
+        return {"error": str(e), "lines": []}
+    _trend_cache[tf] = (time.time(), data)
+    return data
+
+
 @app.get("/api/recap/week")
 def api_recap_week(week: int = 0):
     """Rekap per posisi Senin-Minggu (WIB). week=0 minggu ini, 1 minggu lalu, dst."""
@@ -3365,6 +3451,7 @@ async function addSavedAccount() {
 let lwChart = null;
 let lwSeries = null;
 let lwPriceLines = [];   // [{key, line}] entry/SL/TP
+let lwZonePrim = null;   // kotak zona support/resistance
 let lwLiveLine = null;
 let lwMarkers = [];
 let lwBarRange = null;   // [firstBarTime, lastBarTime] utk filter marker di luar data
@@ -3425,8 +3512,23 @@ function initLWChart(symbol, tf) {
     layout: { background: { color: '#0c1222' }, textColor: '#c8d2e8' },
     grid: { vertLines: { color: 'rgba(148,163,184,0.08)' }, horzLines: { color: 'rgba(148,163,184,0.08)' } },
     rightPriceScale: { borderColor: '#334155' },
-    timeScale: { borderColor: '#334155', timeVisible: true, secondsVisible: false },
-    localization: { timeZone: 'Asia/Jakarta' },
+    // lightweight-charts 4.2 tidak mendukung timeZone: geser label +7 jam (WIB) sendiri
+    timeScale: {
+      borderColor: '#334155', timeVisible: true, secondsVisible: false,
+      tickMarkFormatter: (t, type) => {
+        const d = new Date((t + 25200) * 1000), p2 = n => String(n).padStart(2, '0');
+        if (type === 0) return String(d.getUTCFullYear());
+        if (type === 1) return d.toLocaleString('id-ID', {month: 'short', timeZone: 'UTC'});
+        if (type === 2) return String(d.getUTCDate());
+        return p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes());
+      },
+    },
+    localization: {
+      timeFormatter: t => {
+        const d = new Date((t + 25200) * 1000), p2 = n => String(n).padStart(2, '0');
+        return p2(d.getUTCDate()) + '/' + p2(d.getUTCMonth() + 1) + ' ' + p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes()) + ' WIB';
+      },
+    },
   });
   lwSeries = lwChart.addCandlestickSeries({
     upColor: '#22c55e', downColor: '#ef4444',
@@ -3437,9 +3539,56 @@ function initLWChart(symbol, tf) {
   lwPriceLines = [];
   lwLiveLine = null;
   connectChartWS(symbol, tf);
+  lwLoadZones();
 }
 
+// Zona support (demand, hijau) & resistance (supply, merah) strategi zona
+async function lwLoadZones() {
+  if (!lwSeries) return;
+  const d = await fetchJson('/api/zones', {supports: [], resistances: []});
+  if (!lwSeries) return;
+  if (!lwZonePrim) {
+    let req = null;
+    lwZonePrim = {
+      zones: [],
+      attached(p) { req = p.requestUpdate; },
+      detached() { req = null; },
+      updateAllViews() {},
+      set(z) { this.zones = z; if (req) req(); },
+      paneViews() {
+        const self = this;
+        return [{ zOrder: () => 'bottom', renderer: () => ({ draw: t => t.useBitmapCoordinateSpace(s => {
+          const c = s.context, vr = s.verticalPixelRatio, hr = s.horizontalPixelRatio;
+          self.zones.forEach(z => {
+            const y1 = lwSeries.priceToCoordinate(z.hi), y2 = lwSeries.priceToCoordinate(z.lo);
+            if (y1 == null || y2 == null) return;
+            const top = Math.round(y1 * vr), h = Math.max(Math.round((y2 - y1) * vr), 1);
+            c.fillStyle = z.fill; c.fillRect(0, top, s.bitmapSize.width, h);
+            c.fillStyle = z.color; c.font = (11 * vr) + 'px sans-serif';
+            c.fillText(z.label, 8 * hr, top + h / 2 + 4 * vr);
+          });
+        }) }) }];
+      },
+    };
+    lwSeries.attachPrimitive(lwZonePrim);
+  }
+  const m15 = zs => (zs || []).filter(z => z.tf === 'M15');
+  const box = (zs, color, fill, name) => zs.map(z => ({
+    hi: z.hi, lo: z.lo, color, fill, label: name + ' ' + Math.round(z.lo) + '–' + Math.round(z.hi),
+  }));
+  lwZonePrim.set(
+    box(m15(d.supports), '#22c55e', 'rgba(34,197,94,0.14)', 'DEMAND')
+      .concat(box(m15(d.resistances), '#ef4444', 'rgba(239,68,68,0.14)', 'SUPPLY')));
+}
+setInterval(lwLoadZones, 30000);
+
 function destroyLWChart() {
+  lwZonePrim = null;
+  lwLevelLines = [];
+  lwTrendSeries = [];
+  lwLabelPrim = null;
+  lwLevelLabels = [];
+  lwTrendLabels = [];
   lwPriceLines.forEach(p => { try { lwSeries.removePriceLine(p.line); } catch(e) {} });
   lwPriceLines = [];
   lwLiveLine = null;
@@ -3454,6 +3603,8 @@ function lwSetBars(bars) {
   lwSeries.setData(bars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
   if (lwChart && bars.length) lwChart.timeScale().fitContent();
   lwBarRange = bars.length ? [bars[0].time, bars[bars.length - 1].time] : null;
+  lwLoadLevels();
+  lwLoadTrend();
 }
 
 function lwUpdateBar(bar) {
@@ -3522,6 +3673,86 @@ function lwSetMarkers(signals) {
     lwMarkers = markers;
   } catch(e) {}
 }
+
+// Peta level (pivot harian + high/low) sebagai garis untuk memperkirakan target pergerakan
+let lwLevelLines = [];
+let lwLevelLabels = [], lwTrendLabels = [], lwLabelPrim = null;
+function lwRefreshLabels() {
+  if (!lwSeries) return;
+  if (!lwLabelPrim) {
+    let req = null;
+    lwLabelPrim = {
+      items: [],
+      attached(p) { req = p.requestUpdate; },
+      detached() { req = null; },
+      updateAllViews() {},
+      set(it) { this.items = it; if (req) req(); },
+      paneViews() {
+        const self = this;
+        return [{ zOrder: () => 'top', renderer: () => ({ draw: t => t.useBitmapCoordinateSpace(s => {
+          const c = s.context, vr = s.verticalPixelRatio, hr = s.horizontalPixelRatio;
+          c.font = (11 * vr) + 'px sans-serif'; c.textAlign = 'right'; c.textBaseline = 'bottom';
+          self.items.forEach(it => {
+            const y = lwSeries.priceToCoordinate(it.price);
+            if (y == null) return;
+            const x = s.bitmapSize.width - 8 * hr, yy = Math.round(y * vr) - 2 * vr;
+            const w = c.measureText(it.text).width;
+            c.fillStyle = 'rgba(11,18,32,0.75)'; c.fillRect(x - w - 3 * hr, yy - 13 * vr, w + 6 * hr, 14 * vr);
+            c.fillStyle = it.color; c.fillText(it.text, x, yy);
+          });
+        }) }) }];
+      },
+    };
+    lwSeries.attachPrimitive(lwLabelPrim);
+  }
+  lwLabelPrim.set(lwLevelLabels.concat(lwTrendLabels));
+}
+const LW_LEVEL_COLOR = {res: '#f87171', sup: '#4ade80', pivot: '#fbbf24', hl: '#94a3b8', day: '#60a5fa'};
+async function lwLoadLevels() {
+  if (!lwSeries) return;
+  const d = await fetchJson('/api/levels', {levels: []});
+  if (!lwSeries) return;
+  lwLevelLines.forEach(l => { try { lwSeries.removePriceLine(l); } catch(e) {} });
+  lwLevelLines = (d.levels || []).map(v => lwSeries.createPriceLine({
+    price: v.price, color: LW_LEVEL_COLOR[v.kind] || '#94a3b8', lineWidth: 1,
+    lineStyle: v.kind === 'day' ? 3 : 2, title: '', axisLabelVisible: false,
+  }));
+  lwLevelLabels = (d.levels || []).map(v => ({
+    price: v.price, color: LW_LEVEL_COLOR[v.kind] || '#94a3b8', text: v.name + '  ' + v.price.toFixed(1),
+  }));
+  lwRefreshLabels();
+}
+setInterval(lwLoadLevels, 60000);
+
+// Garis tren otomatis (resisten lewat 2 swing high, support lewat 2 swing low), diperpanjang ke candle terakhir
+let lwTrendSeries = [];
+async function lwLoadTrend() {
+  if (!lwSeries || !lwChart) return;
+  const d = await fetchJson('/api/trendlines?tf=' + encodeURIComponent(chartTF), {lines: []});
+  if (!lwSeries || !lwChart || !lwBarRange) return;
+  lwTrendSeries.forEach(x => { try { lwChart.removeSeries(x); } catch(e) {} });
+  lwTrendSeries = [];
+  lwTrendLabels = [];
+  const [t0, tEnd] = lwBarRange;
+  (d.lines || []).forEach(l => {
+    const slope = (l.p2 - l.p1) / (l.t2 - l.t1);
+    const at = t => l.p1 + slope * (t - l.t1);
+    const tStart = Math.max(l.t1, t0);
+    if (tEnd <= tStart) return;
+    const res = l.kind === 'res';
+    const title = res ? (slope < 0 ? 'GARIS TREN TURUN (resisten)' : 'Batas atas tren naik')
+                      : (slope > 0 ? 'GARIS TREN NAIK (support)' : 'Batas bawah tren turun');
+    const ls = lwChart.addLineSeries({
+      color: res ? '#fb923c' : '#38bdf8', lineWidth: 2, lineStyle: 0, title: '',
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    ls.setData([{time: tStart, value: at(tStart)}, {time: tEnd, value: at(tEnd)}]);
+    lwTrendSeries.push(ls);
+    lwTrendLabels.push({price: at(tEnd), color: res ? '#fb923c' : '#38bdf8', text: title});
+  });
+  lwRefreshLabels();
+}
+setInterval(lwLoadTrend, 30000);
 
 function updateWSChip(state, detail) {
   const chip = document.getElementById('wsChip');

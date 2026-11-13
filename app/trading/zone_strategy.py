@@ -332,3 +332,23 @@ def analyze(symbol=None):
     # H1: 300 bar hanya jika filter searah aktif (EMA50 butuh warmup panjang).
     df_h1 = _load("H1") if _cfg("zone_htf_align", 0) else None
     return analyze_from_dfs(df_m5, df_m15, df_h1)
+
+
+def chart_zones(symbol=None):
+    """Zona support (demand) / resistance (supply) M15 + M5 untuk digambar di chart dashboard."""
+    from app.data.collector import Collector
+    from app.indicators.engine import IndicatorEngine
+    from app.preprocessing.cleaner import DataCleaner
+
+    collector, indicator, cleaner = Collector(), IndicatorEngine(), DataCleaner()
+    dfs = {tf: cleaner.clean(indicator.calculate(collector.load(symbol=symbol, timeframe=tf, bars=300)))
+           for tf in ("M5", "M15")}
+    atr = float(dfs["M5"].iloc[-2].get("ATR", 0) or 0)
+    lookback = int(_cfg("zone_lookback", 40))
+    band_atr = _cfg("zone_band_atr", 0.30)
+    out = {"atr": round(atr, 2), "supports": [], "resistances": []}
+    for tf, df in dfs.items():
+        sup, res = find_zones(df, atr, lookback=lookback, band_atr=band_atr)
+        out["supports"] += [{"lo": round(z.lo, 2), "hi": round(z.hi, 2), "tf": tf} for z in sup]
+        out["resistances"] += [{"lo": round(z.lo, 2), "hi": round(z.hi, 2), "tf": tf} for z in res]
+    return out
