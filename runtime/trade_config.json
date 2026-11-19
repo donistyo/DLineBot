@@ -20,6 +20,7 @@
   "max_profit_usd": 0,
   "recover_red_usd": 1.0,
   "recover_close_usd": 0.25,
+  "never_green_close_usd": 1.0,
   "wick_reject_mult": 4.5,
   "sl_atr_mult": 1.0,
   "atr_entry_max": 5.0,

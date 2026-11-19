@@ -35,6 +35,7 @@ class ATRProtectionManager:
         emergency_max_usd=0.0,
         recover_red_usd=0.0,
         recover_close_usd=0.0,
+        never_green_close_usd=0.0,
         zone_time_exit_min=90.0,
     ):
         self.sl_atr_mult = sl_atr_mult
@@ -64,6 +65,7 @@ class ATRProtectionManager:
         self.emergency_max_usd = emergency_max_usd
         self.recover_red_usd = recover_red_usd
         self.recover_close_usd = recover_close_usd
+        self.never_green_close_usd = never_green_close_usd
         self.zone_time_exit_min = zone_time_exit_min
 
         self.controller = PositionController()
@@ -73,6 +75,7 @@ class ATRProtectionManager:
         self._stall_start = {}
         self._ever_profit = set()
         self._real_red = set()
+        self._ever_green = set()
         self._sl_plus_armed = self._load_armed()
 
     ARMED_PATH = "runtime/sl_plus_armed.json"
@@ -98,6 +101,7 @@ class ATRProtectionManager:
         self._stall_start = {t: s for t, s in self._stall_start.items() if t in active_tickets}
         self._ever_profit = {t for t in self._ever_profit if t in active_tickets}
         self._real_red = {t for t in self._real_red if t in active_tickets}
+        self._ever_green = {t for t in self._ever_green if t in active_tickets}
         _armed = {t for t in self._sl_plus_armed if t in active_tickets}
         if _armed != self._sl_plus_armed:
             self._sl_plus_armed = _armed
@@ -257,6 +261,23 @@ class ATRProtectionManager:
                                   f"dan balik profit {position.profit:.2f} >= {self.recover_close_usd:.2f} "
                                   f"-> close aman.",
                         "ticket": position.ticket, "result": result}
+
+        # ======================================
+        # NEVER GREEN CLOSE: posisi belum pernah profit (> 0) sejak entry,
+        # lalu profit mendadak melonjak >= never_green_close_usd -> langsung close.
+        # shortcut: set hilang saat restart, posisi yang sudah hijau bisa dianggap belum hijau; upgrade bila perlu persist.
+        # ======================================
+        if self.never_green_close_usd > 0:
+            if (position.ticket not in self._ever_green
+                    and position.profit >= self.never_green_close_usd):
+                _log_close("NEVER_GREEN_CLOSE", position.ticket, position.symbol, position.profit)
+                result = self.controller.close(position, caller="NEVER_GREEN_CLOSE")
+                return {"status": "CLOSED", "action": "NEVER_GREEN",
+                        "reason": f"Posisi belum pernah profit lalu lonjak ke {position.profit:.2f} "
+                                  f">= {self.never_green_close_usd:.2f} -> close.",
+                        "ticket": position.ticket, "result": result}
+            if position.profit > 0:
+                self._ever_green.add(position.ticket)
 
         # ======================================
         # MAX PROFIT: profit >= max_profit_usd -> langsung close.

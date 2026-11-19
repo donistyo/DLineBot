@@ -346,6 +346,7 @@ class LiveEngine:
             emergency_max_usd=float(get_trade_config("emergency_max_usd", 0.0)),
             recover_red_usd=float(get_trade_config("recover_red_usd", 1.0)),
             recover_close_usd=float(get_trade_config("recover_close_usd", 0.25)),
+            never_green_close_usd=float(get_trade_config("never_green_close_usd", 0.0) or 0),
             zone_time_exit_min=float(get_trade_config("zone_time_exit_min", 90) or 0),
         )
 

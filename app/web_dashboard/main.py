@@ -212,6 +212,8 @@ app = FastAPI(title="DLine")
 
 from app.tradingview.webhook import router as tradingview_router
 app.include_router(tradingview_router)
+from app.web_dashboard.settings_api import router as settings_router
+app.include_router(settings_router)
 
 
 # =====================================
@@ -1770,6 +1772,43 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 .tv-pill.off { background:rgba(252,165,165,0.08); border:1px solid rgba(252,165,165,0.3); color:#fca5a5; }
 .tv-pill.off .dot { background:#fca5a5; }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+/* === Tema panel ala aplikasi trading (tetap biru) === */
+body { background:radial-gradient(900px 520px at 0% 100%, rgba(37,99,235,0.22), transparent 60%), radial-gradient(700px 420px at 100% 0%, rgba(59,130,246,0.14), transparent 60%), #070d1c; }
+.app { margin:12px; min-height:calc(100vh - 24px); border:1px solid rgba(96,165,250,0.55); border-radius:18px; box-shadow:0 0 26px rgba(59,130,246,0.28), inset 0 0 40px rgba(37,99,235,0.08); background:rgba(8,14,30,0.88); overflow:hidden; }
+.sidebar { background:rgba(8,14,30,0.55); border-right:1px solid rgba(96,165,250,0.18); height:calc(100vh - 26px); }
+.main-content { max-height:calc(100vh - 26px); }
+.sidebar-item { border-radius:10px; padding:9px 12px; }
+.sidebar-item.active { background:rgba(59,130,246,0.18); color:#93c5fd; box-shadow:inset 0 0 0 1px rgba(96,165,250,0.35), 0 0 12px rgba(59,130,246,0.22); }
+.card, .chart-container, .tv-chart, .tv-signal, .tv-pos, .tv-risk, table, .recap-table { background:rgba(12,20,42,0.72); border:1px solid rgba(96,165,250,0.16); border-radius:14px; }
+.card:hover { border-color:rgba(96,165,250,0.4); box-shadow:0 0 14px rgba(59,130,246,0.15); }
+th, .recap-table th { background:rgba(20,32,64,0.75); }
+.tv-pnl, .tv-risk-cell { background:rgba(8,14,30,0.8); border-color:rgba(96,165,250,0.18); }
+/* tab TradingView: chart besar di kiri, panel checklist/sinyal/posisi/risiko di kanan */
+.tv-main { display:grid; grid-template-columns:minmax(0,1fr) 340px; grid-template-areas:"chart check" "side side"; gap:12px; align-items:start; }
+.tv-chart { grid-area:chart; }
+.tv-check { grid-area:check; position:relative; align-self:stretch; min-height:300px; }
+.tv-check > .tv-signal { position:absolute; inset:0; overflow-y:auto; }
+.tv-side { grid-area:side; grid-template-columns:repeat(3,1fr); }
+#tv_chart { height:max(640px, calc(100vh - 340px)) !important; }
+@media(max-width:1180px){ .tv-main { grid-template-columns:1fr; grid-template-areas:"chart" "check" "side"; } .tv-check { min-height:0; } .tv-check > .tv-signal { position:static; } #tv_chart { height:520px !important; min-height:520px; } }
+@media(max-width:980px){ .tv-side { grid-template-columns:1fr; } }
+/* menu Settings */
+.st-lock { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 14px; margin-bottom:10px; border-radius:12px; border:1px solid rgba(96,165,250,0.2); background:rgba(12,20,42,0.72); font-size:12px; color:#94a3b8; }
+.st-lock.on { border-color:rgba(251,191,36,0.5); color:#fbbf24; background:rgba(251,191,36,0.07); }
+.st-group { margin-bottom:12px; padding:12px 14px; border-radius:14px; border:1px solid rgba(96,165,250,0.16); background:rgba(12,20,42,0.72); }
+.st-group h3 { font-size:11px; color:#60a5fa; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:10px; }
+.st-fields { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:10px; }
+.st-f label { display:block; font-size:11px; color:#94a3b8; margin-bottom:4px; }
+.st-f input { width:100%; padding:8px; background:#0b1220; border:1px solid #334155; color:#e2e8f0; border-radius:8px; font-family:'JetBrains Mono',monospace; }
+.st-f input.dirty { border-color:#fbbf24; box-shadow:0 0 8px rgba(251,191,36,0.25); }
+.st-f input:disabled { opacity:0.55; }
+.st-f .hint { font-size:10px; color:#64748b; margin-top:3px; }
+.st-rs { color:#fbbf24; font-weight:600; }
+.st-actions { display:flex; align-items:center; gap:12px; margin:6px 0 4px; flex-wrap:wrap; }
+.st-btn { padding:9px 18px; background:#2563eb; color:#fff; border:0; border-radius:8px; font-weight:600; cursor:pointer; }
+.st-btn:disabled { background:#334155; color:#94a3b8; cursor:not-allowed; }
+.st-btn.ghost { background:transparent; border:1px solid #334155; color:#94a3b8; padding:5px 10px; font-size:11px; }
+@media(max-width:900px){ .app { margin:0; border-radius:0; border-width:0; } .sidebar { height:100vh; } .main-content { max-height:100vh; } }
 </style>
 </head>
 <body>
@@ -2212,18 +2251,6 @@ tr:hover td { background:rgba(59,130,246,0.05); }
   </div>
 </div>
 
-<div style="margin-top:12px">
-<div id="tvEndpoint" style="font-size:12px;color:#94a3b8;background:#1e293b;border-radius:6px;padding:10px 14px;margin-bottom:10px;word-break:break-all"></div>
-
-<div id="tvGuide" style="font-size:12px;color:#94a3b8;background:#1e293b;border-radius:6px;padding:12px 14px;margin-bottom:12px;line-height:1.7">
-  <b style="color:#e2e8f0">Cara setup di TradingView:</b><br>
-  1. Buka <b>strategies/dline_scalping.pine</b> dan buat alert.<br>
-  2. Webhook URL = endpoint di atas.<br>
-  3. Message JSON (isi secret dari .env):
-  <code id="tvSample" style="display:block;background:#0f172a;color:#a5b4fc;border-radius:4px;padding:8px;margin-top:6px;font-size:11px"></code>
-</div>
-</div>
-
 <h2>Log Semua Trading</h2>
 <div class="table-wrap"><table><thead><tr>
   <th>Waktu</th><th>Symbol</th><th>Signal</th><th>Status</th><th>Alasan</th><th>Lot</th><th>Harga</th><th>Profit</th><th>Ticket</th>
@@ -2232,6 +2259,17 @@ tr:hover td { background:rgba(59,130,246,0.05); }
 </div>
 
 <div id="tab-settings" style="display:none">
+
+<h2>Proteksi &amp; Jadwal</h2>
+<div class="grid" id="stProt"><div class="card"><div class="lbl">Memuat...</div></div></div>
+
+<h2>Pengaturan Strategi</h2>
+<div id="stLockBar" class="st-lock"></div>
+<div id="stForm"></div>
+<div class="st-actions"><button id="stSave" class="st-btn" onclick="stSave()">Simpan perubahan</button><span id="stMsg"></span></div>
+
+<h2>Catatan Perubahan</h2>
+<div class="table-wrap"><table><thead><tr><th>Waktu</th><th>Parameter</th><th>Lama</th><th>Baru</th><th></th></tr></thead><tbody id="stHist"><tr><td colspan="5" style="color:#64748b">Belum ada perubahan.</td></tr></tbody></table></div>
 
 <h2>Account MT5</h2>
 <div id="accStatusBox" style="background:#1e293b;border-radius:6px;padding:16px;font-size:13px">
@@ -2331,6 +2369,7 @@ function switchTab(name, el) {
     fetchIntraday();
   }
   if (name === 'settings') {
+    stLoad();
     loadAccountStatus();
     loadSavedAccounts();
   }
@@ -2475,6 +2514,80 @@ function makeChart(id, type, labels, datasets, opts) {
       ...opts
     }
   });
+}
+
+// ===== Menu Settings: proteksi, parameter strategi, kunci fase uji, catatan perubahan =====
+function stEsc(x) { return String(x == null ? '' : x).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+let stLocked = false;
+async function stLoad() {
+  const [cfg, pr] = await Promise.all([fetchJson('/api/settings/config', null), fetchJson('/api/settings/protection', null)]);
+  if (pr) stRenderProt(pr);
+  if (cfg) { stLocked = !!(cfg.lock && cfg.lock.locked); stRenderForm(cfg); stRenderHist(cfg.history || []); }
+}
+function stRenderProt(p) {
+  const card = (l, v, cls) => '<div class="card"><div class="lbl">' + l + '</div><div class="val ' + (cls || '') + '" style="font-size:15px">' + v + '</div></div>';
+  const n = p.next_news;
+  const newsTxt = p.news_off_active ? 'Bot dimatikan oleh berita' : (n ? stEsc(n.title) + '<br><span style="font-size:11px;color:#94a3b8">' + stEsc(n.time) + ' | OFF ' + n.off_at + ' | ON ' + n.on_at + '</span>' : 'Tidak ada High USD tersisa pekan ini');
+  const pnl = p.today_pnl;
+  document.getElementById('stProt').innerHTML =
+    card('Autotrade', p.autotrade ? 'ON' : 'OFF', p.autotrade ? 'green' : 'red') +
+    card('Jadwal otomatis', 'ON ' + p.start_schedule + ' &rarr; OFF ' + p.off_schedule + ' WIB') +
+    card('Berita High USD berikutnya', newsTxt, p.news_off_active ? 'yellow' : '') +
+    card('Equity / jarak ke floor', (p.equity != null ? p.equity.toFixed(2) : '-') + '<br><span style="font-size:11px;color:#94a3b8">floor ' + p.equity_floor + (p.to_floor != null ? ' | sisa ' + p.to_floor : '') + '</span>') +
+    card('Hasil bot hari ini', (pnl != null ? (pnl >= 0 ? '+' : '') + pnl.toFixed(2) : '-') + '<br><span style="font-size:11px;color:#94a3b8">' + (p.today_trades != null ? p.today_trades : '-') + ' / ' + p.max_trade + ' trade</span>', pnl == null ? '' : (pnl >= 0 ? 'green' : 'red')) +
+    card('Batas harian', 'rugi ' + p.daily_max_loss + ' | untung ' + p.daily_max_profit);
+}
+function stRenderForm(cfg) {
+  const bar = document.getElementById('stLockBar');
+  const lk = cfg.lock || {};
+  bar.className = 'st-lock' + (stLocked ? ' on' : '');
+  bar.innerHTML = '<span>' + (stLocked ? '&#128274; Dikunci (fase uji) sejak ' + stEsc(lk.since) + (lk.note ? ' - ' + stEsc(lk.note) : '') : '&#128275; Terbuka. Kunci pengaturan selama periode uji supaya tidak ada perubahan tanpa sengaja.') + '</span><button class="st-btn ghost" onclick="stToggleLock()">' + (stLocked ? 'Buka kunci' : 'Kunci pengaturan') + '</button>';
+  const groups = {};
+  cfg.fields.forEach(f => (groups[f.group] = groups[f.group] || []).push(f));
+  document.getElementById('stForm').innerHTML = Object.keys(groups).map(g =>
+    '<div class="st-group"><h3>' + stEsc(g) + '</h3><div class="st-fields">' + groups[g].map(f =>
+      '<div class="st-f"><label>' + stEsc(f.label) + (f.restart ? ' <span class="st-rs" title="Berlaku setelah engine di-restart">&#8635;</span>' : '') + '</label>' +
+      '<input type="number" data-key="' + f.key + '" data-orig="' + stEsc(f.value) + '" value="' + stEsc(f.value) + '" min="' + f.min + '" max="' + f.max + '" step="' + f.step + '" oninput="stDirty(this)"' + (stLocked ? ' disabled' : '') + '>' +
+      '<div class="hint">' + f.min + ' sampai ' + f.max + (f.restart ? ' | perlu restart' : ' | langsung berlaku') + '</div></div>').join('') + '</div></div>').join('');
+  document.getElementById('stSave').disabled = stLocked;
+}
+function stDirty(el) { el.classList.toggle('dirty', el.value !== el.dataset.orig); }
+function stRenderHist(rows) {
+  document.getElementById('stHist').innerHTML = rows.length ? rows.map(r =>
+    '<tr><td>' + stEsc(r.ts) + '</td><td>' + stEsc(r.key) + (r.revert_of ? ' <span style="color:#64748b">(dikembalikan)</span>' : '') + '</td><td>' + stEsc(r.old) + '</td><td>' + stEsc(r.new) + '</td><td>' +
+    (stLocked ? '' : '<button class="st-btn ghost" onclick="stRevert(' + r.id + ')">Kembalikan</button>') + '</td></tr>').join('')
+    : '<tr><td colspan="5" style="color:#64748b">Belum ada perubahan.</td></tr>';
+}
+async function stPost(url, body) {
+  const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  return {status: r.status, data: await r.json().catch(() => ({}))};
+}
+async function stSave() {
+  const ch = {}, lines = [];
+  document.querySelectorAll('#stForm input.dirty').forEach(i => { ch[i.dataset.key] = i.value; lines.push(i.dataset.key + ': ' + i.dataset.orig + ' -> ' + i.value); });
+  const msg = document.getElementById('stMsg');
+  if (!lines.length) { msg.style.color = '#94a3b8'; msg.textContent = 'Tidak ada perubahan.'; return; }
+  if (!confirm('Ubah ' + lines.length + ' parameter?\\n\\n' + lines.join('\\n'))) return;
+  const r = await stPost('/api/settings/config', {changes: ch});
+  if (!r.data.ok) { msg.style.color = '#fca5a5'; msg.textContent = r.data.error || 'Gagal menyimpan'; return; }
+  const rs = r.data.restart_needed || [];
+  msg.style.color = '#6ee7b7';
+  msg.textContent = 'Tersimpan.' + (rs.length ? ' Perlu restart engine agar berlaku: ' + rs.join(', ') : ' Langsung berlaku.');
+  stLoad();
+}
+async function stRevert(id) {
+  if (!confirm('Kembalikan parameter ini ke nilai sebelumnya?')) return;
+  const r = await stPost('/api/settings/revert', {id});
+  const msg = document.getElementById('stMsg');
+  msg.style.color = r.data.ok ? '#6ee7b7' : '#fca5a5';
+  msg.textContent = r.data.ok ? 'Dikembalikan: ' + r.data.key + ' = ' + r.data.value + (r.data.restart_needed ? ' (perlu restart engine)' : '') : (r.data.error || 'Gagal');
+  stLoad();
+}
+async function stToggleLock() {
+  let note = '';
+  if (!stLocked) { note = prompt('Catatan kunci (mis. Fase 2 sampai rekap 20 Nov):', '') || ''; }
+  await stPost('/api/settings/lock', {locked: !stLocked, note});
+  stLoad();
 }
 
 async function fetchJson(url, fallback, timeoutMs=8000) {
@@ -4187,21 +4300,6 @@ async function fetchTVMonitor() {
   // Isi input lot dari config
   const lotIn = document.getElementById('tvLotIn');
   if (lotIn && st.lot_size != null) lotIn.value = Number(st.lot_size).toFixed(2);
-
-  // Endpoint + sample
-  const ep = document.getElementById('tvEndpoint');
-  if (ep) {
-    const base = window.location.origin || 'http://127.0.0.1:8000';
-    ep.innerHTML = '<b style="color:#e2e8f0">Webhook URL:</b> <code style="color:#a5b4fc">' + base + '/api/tradingview/webhook</code>';
-  }
-  const sample = document.getElementById('tvSample');
-  if (sample) {
-    sample.textContent = JSON.stringify({
-      secret: '<WEBHOOK_SECRET>', symbol: 'XAUUSDc', signal: 'BUY',
-      volume: st.lot_size || 0.01, entry: 0, stop_loss: 0,
-      take_profit1: 0, take_profit2: 0, kinerja: 'Momentum breakout', tf: '5'
-    }, null, 2);
-  }
 
   renderTVSignal(scalp.scalp_score || {}, mtf.tfs || {}, ck || {});
   // Store mon data globally for position lines
