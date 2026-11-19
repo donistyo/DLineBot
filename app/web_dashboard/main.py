@@ -1809,6 +1809,32 @@ th, .recap-table th { background:rgba(20,32,64,0.75); }
 .st-btn:disabled { background:#334155; color:#94a3b8; cursor:not-allowed; }
 .st-btn.ghost { background:transparent; border:1px solid #334155; color:#94a3b8; padding:5px 10px; font-size:11px; }
 @media(max-width:900px){ .app { margin:0; border-radius:0; border-width:0; } .sidebar { height:100vh; } .main-content { max-height:100vh; } }
+/* HP: halaman scroll biasa, tidak ada elemen yang melebihi lebar layar */
+.main-content, .tv-main > *, .grid > *, .chart-grid > *, .chart-container { min-width:0; }
+@media(max-width:600px){
+  html, body { overflow-x:hidden; width:100%; }
+  .app { display:block; min-height:100vh; overflow:visible; }
+  .main-content { max-height:none; overflow:visible; width:100%; padding:10px; }
+  .grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .card { padding:10px 12px; }
+  .card .val { overflow-wrap:anywhere; }
+  .chart-container, .tv-chart, .tv-signal, .tv-pos, .tv-risk { padding:8px; max-width:100%; }
+  .chart-container canvas { max-width:100%; }
+  table { display:block; overflow-x:auto; white-space:nowrap; -webkit-overflow-scrolling:touch; }
+  .header-bar { margin-bottom:10px; }
+  .header-bar .header-right { flex-wrap:wrap; gap:6px; }
+  .tv-main { grid-template-columns:minmax(0,1fr); }
+  .tv-side { grid-template-columns:minmax(0,1fr); }
+  #tv_chart { height:420px !important; min-height:420px; }
+  .tv-risk-grid { grid-template-columns:1fr 1fr; }
+  .tv-dir { font-size:22px; }
+  .st-fields { grid-template-columns:minmax(0,1fr); }
+  .st-lock { font-size:11px; }
+  .mobile-menu .sidebar-item { padding:12px; }
+  .tv-signal-head { flex-wrap:wrap; gap:6px; }
+  #chartSourceWrap { flex-wrap:wrap; }
+  .tv-signal span[title] { white-space:normal !important; border-radius:12px !important; }
+}
 </style>
 </head>
 <body>
